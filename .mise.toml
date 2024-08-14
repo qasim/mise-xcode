@@ -1,0 +1,9 @@
+[tools]
+shfmt = "latest"
+shellcheck = "latest"
+
+[tasks.lint]
+run = [
+    "shellcheck ./bin/*",
+    "shfmt -i 2 -w -s ./bin/*"
+]
