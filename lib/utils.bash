@@ -9,9 +9,24 @@ list_all_versions() {
     xcode_version_aliases=()
 
     for bundle_path in $(mdfind -onlyin "$search_path" "kMDItemCFBundleIdentifier='com.apple.dt.Xcode'"); do
-        echo "$i"
+        echo "$bundle_path"
     done
 }
 
-# sort_versions() {
-# }
+print_latest_stable_version() {
+}
+
+list_legacy_filenames() {
+    echo ".xcode-version .xcversion"
+}
+
+parse_legacy_file() {
+    file_path="$0"
+}
+
+install() {
+}
+
+prepare_environment() {
+
+}
