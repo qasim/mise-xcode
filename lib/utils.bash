@@ -41,6 +41,7 @@ xcode_build() {
     install_tag=$(list_github_tags | grep "$ASDF_INSTALL_VERSION+" -s || true)
     if [ -z "$install_tag" ]; then
         echo ""
+        exit 0
     fi
 
     install_build=$(echo "$install_tag" | cut -d"+" -f2)
@@ -70,6 +71,7 @@ xcode_developer_dir() {
 
     if [ -z "$install_developer_dir" ]; then
         echo ""
+        exit 0
     fi
 
     echo "$install_developer_dir"
