@@ -10,7 +10,7 @@ fail() {
 }
 
 list_github_tags() {
-    git ls-remote --tags --refs --sort="v:refname" "$GH_REPO" | grep -o 'refs/tags/.*' | cut -d/ -f3-
+    git ls-remote --tags --refs "$GH_REPO" | grep -o 'refs/tags/.*' | cut -d/ -f3-
 }
 
 list_github_versions() {
