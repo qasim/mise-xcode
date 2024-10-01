@@ -37,15 +37,20 @@ parse_legacy_file() {
     file_path="$0"
 }
 
-xcode_developer_dir() {
-    search_path="${MISE_TOOL_OPTS__SEARCH_PATH:-/}"
-
+xcode_build() {
     install_tag=$(list_github_tags | grep "$ASDF_INSTALL_VERSION+" -s || true)
     if [ -z "$install_tag" ]; then
         fail "No Xcode version exists that corresponds to $ASDF_INSTALL_VERSION."
     fi
 
     install_build=$(echo "$install_tag" | cut -d"+" -f2)
+    echo "$install_build"
+}
+
+xcode_developer_dir() {
+    search_path="${MISE_TOOL_OPTS__SEARCH_PATH:-/}"
+
+    install_build=$(cat "$ASDF_INSTALL_PATH/BUILD")
 
     install_developer_dir=""
     for bundle_path in $(mdfind -onlyin "$search_path" "kMDItemCFBundleIdentifier='com.apple.dt.Xcode'"); do
@@ -57,7 +62,7 @@ xcode_developer_dir() {
     done
 
     if [ -z "$install_developer_dir" ]; then
-        fail "Xcode version $ASDF_INSTALL_VERSION not found on disk."
+        fail "No Xcode $ASDF_INSTALL_VERSION installation found on disk."
     fi
 
     echo "$install_developer_dir"
@@ -68,11 +73,12 @@ download() {
         fail "Git ref install types are not supported."
     fi
 
-    xcode_developer_dir 1> /dev/null
+    xcode_build 1> /dev/null
 }
 
 install() {
-    xcode_developer_dir 1> /dev/null
+    install_build=$(xcode_build)
+    echo "$install_build" > "$ASDF_INSTALL_PATH/BUILD"
 }
 
 prepare_environment() {
