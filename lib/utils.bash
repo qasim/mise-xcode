@@ -40,11 +40,18 @@ parse_legacy_file() {
 xcode_build() {
     install_tag=$(list_github_tags | grep "$ASDF_INSTALL_VERSION+" -s || true)
     if [ -z "$install_tag" ]; then
-        fail "No Xcode version exists that corresponds to $ASDF_INSTALL_VERSION."
+        echo ""
     fi
 
     install_build=$(echo "$install_tag" | cut -d"+" -f2)
     echo "$install_build"
+}
+
+download() {
+    install_build=$(xcode_build)
+    if [ -z "$install_build" ]; then
+        fail "No Xcode version exists that corresponds to $ASDF_INSTALL_VERSION."
+    fi
 }
 
 xcode_developer_dir() {
@@ -62,23 +69,24 @@ xcode_developer_dir() {
     done
 
     if [ -z "$install_developer_dir" ]; then
-        fail "No Xcode $ASDF_INSTALL_VERSION installation found on disk."
+        echo ""
     fi
 
     echo "$install_developer_dir"
 }
 
-download() {
+install() {
     if [ "$ASDF_INSTALL_TYPE" != "version" ]; then
         fail "Git ref install types are not supported."
     fi
 
-    xcode_build 1> /dev/null
-}
-
-install() {
     install_build=$(xcode_build)
     echo "$install_build" > "$ASDF_INSTALL_PATH/BUILD"
+
+    install_developer_dir=$(xcode_developer_dir)
+    if [ -z "$install_developer_dir" ]; then
+        fail "No Xcode $ASDF_INSTALL_VERSION installation found inside search path."
+    fi
 }
 
 prepare_environment() {
