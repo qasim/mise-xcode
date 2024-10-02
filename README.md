@@ -60,3 +60,17 @@ You can specify a custom search path via the `search_path` parameter:
 [tools]
 xcode = {version='16.0.0', search_path='/Applications'}
 ```
+
+## Troubleshooting
+
+### ```No Xcode <version> installation found inside search path.```
+
+The plugin was not able to find a valid Xcode installation for the provided version.
+
+Make sure you have it installed and it's available inside the search path. By default, this plugin looks for Xcode installations with a search path of `/`, i.e. anywhere on your disk.
+
+### ```No Xcode version exists that corresponds to <version>.```
+
+According to the plugin, this Xcode version doesn't exist at all.
+
+Double check that the Xcode version you're trying to use is accounted for at [xcodereleases.com](https://xcodereleases.com/).
