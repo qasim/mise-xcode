@@ -87,7 +87,7 @@ install() {
 
     install_developer_dir=$(xcode_developer_dir)
     if [ -z "$install_developer_dir" ]; then
-        fail "No Xcode $ASDF_INSTALL_VERSION installation found inside search path."
+        fail "No Xcode $ASDF_INSTALL_VERSION installation found within search path."
     fi
 }
 
