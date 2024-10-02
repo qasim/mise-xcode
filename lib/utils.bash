@@ -29,6 +29,14 @@ print_latest_stable_version() {
     list_github_versions | sort_versions | tail -r | grep -m 1 -v "-"
 }
 
+list_legacy_filenames() {
+    echo ".xcode-version .xcversion"
+}
+
+parse_legacy_file() {
+    file_path="$0"
+}
+
 xcode_build() {
     install_tag=$(list_github_tags | grep "$ASDF_INSTALL_VERSION+" -s || true)
     if [ -z "$install_tag" ]; then
