@@ -1,9 +1,8 @@
 [tools]
-shfmt = "latest"
-shellcheck = "latest"
+stylua = "latest"
 
 [tasks.lint]
-run = [
-    "shellcheck ./bin/*",
-    "shfmt -i 2 -w -s ./bin/*"
-]
+run = "stylua --check metadata.lua hooks lib"
+
+[tasks.fmt]
+run = "stylua metadata.lua hooks lib"
