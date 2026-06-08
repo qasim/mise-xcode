@@ -7,17 +7,17 @@ Xcode plugin for the [Mise](https://github.com/jdx/mise) version manager.
 
 ## Install
 
-### Option 1: Specify plugin inside your project's [configuration](https://mise.jdx.dev/configuration.html)
+### Option 1: Specify the plugin inside your project's [configuration](https://mise.jdx.dev/configuration.html)
 
 ```toml
 [plugins]
 xcode = 'https://github.com/qasim/mise-xcode'
 ```
 
-### Option 2: Install plugin globally
+### Option 2: Install the plugin globally
 
 ```bash
-mise plugin install xcode https://github.com/qasim/mise-xcode
+mise plugins install xcode https://github.com/qasim/mise-xcode
 ```
 
 ## Use
@@ -35,6 +35,8 @@ or
 xcode = 'latest'
 ```
 
+This resolves to the latest stable Xcode version known by the plugin.
+
 ### Selecting a specific version of Xcode
 
 ```toml
@@ -44,11 +46,11 @@ xcode = '16.0.0'
 
 ### Selecting the latest stable version of a major Xcode
 
-Using version `15` will select `15.4.0`.
+Using version `26` will select the latest stable `26.x.y` release known by the plugin.
 
 ```console
-foo@bar:~$ mise use xcode@15
-mise ~/foo/bar/.mise.toml tools: xcode@15.4.0
+foo@bar:~$ mise use xcode@26
+mise ~/foo/bar/mise.toml tools: xcode@26.5.0
 ```
 
 ### Selecting Xcodes within a specific search path
@@ -63,7 +65,7 @@ xcode = {version='16.0.0', search_path='/Applications'}
 
 ## Troubleshooting
 
-### ```No Xcode <version> installation found inside search path.```
+### ```No Xcode <version> installation found within search path.```
 
 The plugin was not able to find a valid Xcode installation for the provided version.
 
