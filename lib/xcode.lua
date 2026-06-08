@@ -1,9 +1,12 @@
 local cmd = require("cmd")
+local http = require("http")
+local json = require("json")
 
 local xcode = {}
 
 xcode.github_repo = "https://github.com/qasim/Xcode"
 xcode.github_tags_url = xcode.github_repo .. ".git"
+xcode.github_api_repo_url = "https://api.github.com/repos/qasim/Xcode"
 
 local records_cache = nil
 local records_by_version_cache = nil
@@ -104,6 +107,7 @@ local function load_tag_records()
   local by_version = {}
 
   for _, line in ipairs(split_lines(output)) do
+    local tag_sha = line:match("^([^%s]+)%s+")
     local tag = line:match("refs/tags/(.+)$")
     if tag ~= nil then
       local version, build = tag:match("^(.+)%+(.+)$")
@@ -113,6 +117,7 @@ local function load_tag_records()
           version = version,
           build = build,
           tag = tag,
+          tag_sha = tag_sha,
         })
       end
     end
@@ -203,7 +208,7 @@ function xcode.build_for_version(version, search_path)
     error("No Xcode version exists that corresponds to " .. version .. ".")
   end
 
-  return record.build, record.version
+  return record.build, record.version, record
 end
 
 local function xcode_bundle_paths(search_path)
@@ -232,10 +237,52 @@ function xcode.find_developer_dir(build, search_path)
   return nil
 end
 
-function xcode.require_developer_dir(version, build, search_path)
+function xcode.installation_hint(record)
+  if record == nil or record.tag_sha == nil then
+    return nil
+  end
+  if record.installation_url ~= nil then
+    return record.installation_url
+  end
+
+  local resp, err = http.get({
+    url = xcode.github_api_repo_url .. "/git/tags/" .. record.tag_sha,
+  })
+  if err ~= nil or resp == nil or resp.status_code ~= 200 then
+    return nil
+  end
+
+  local ok, body = pcall(function()
+    return json.decode(resp.body)
+  end)
+  if not ok or body == nil then
+    return nil
+  end
+
+  local message = body.message
+  local url = tostring(message or ""):match("https://%S+")
+  record.installation_url = url
+  return record.installation_url
+end
+
+function xcode.record_for_version_and_build(version, build)
+  for _, record in ipairs(records_for_version(version)) do
+    if record.build == build then
+      return record
+    end
+  end
+  return nil
+end
+
+function xcode.require_developer_dir(version, build, search_path, record)
   local developer_dir = xcode.find_developer_dir(build, search_path)
   if developer_dir == nil then
-    error("No Xcode " .. version .. " installation found within search path.")
+    local message = "No Xcode " .. version .. " installation found within search path."
+    local installation_hint = xcode.installation_hint(record)
+    if installation_hint ~= nil and installation_hint ~= "" then
+      message = message .. "\nInstall it from: " .. installation_hint
+    end
+    error(message)
   end
   return developer_dir
 end
