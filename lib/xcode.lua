@@ -6,6 +6,7 @@ xcode.github_repo = "https://github.com/qasim/Xcode"
 xcode.github_tags_url = xcode.github_repo .. ".git"
 
 local records_cache = nil
+local records_by_version_cache = nil
 
 local function trim(value)
   return tostring(value or ""):gsub("^%s+", ""):gsub("%s+$", "")
@@ -92,9 +93,9 @@ local function compare_natural(left, right)
   return 0
 end
 
-local function tag_records()
+local function load_tag_records()
   if records_cache ~= nil then
-    return records_cache
+    return records_cache, records_by_version_cache
   end
 
   local output = cmd.exec("git ls-remote --tags --refs " .. shell_quote(xcode.github_tags_url), {
@@ -107,28 +108,40 @@ local function tag_records()
     if tag ~= nil then
       local version, build = tag:match("^(.+)%+(.+)$")
       if version ~= nil and build ~= nil then
-        local existing_record = by_version[version]
-        if existing_record == nil or compare_natural(build, existing_record.build) > 0 then
-          by_version[version] = {
-            version = version,
-            build = build,
-            tag = tag,
-          }
-        end
+        by_version[version] = by_version[version] or {}
+        table.insert(by_version[version], {
+          version = version,
+          build = build,
+          tag = tag,
+        })
       end
     end
   end
 
   local records = {}
-  for _, record in pairs(by_version) do
-    table.insert(records, record)
+  for _, version_records in pairs(by_version) do
+    table.sort(version_records, function(left, right)
+      return compare_natural(left.build, right.build) > 0
+    end)
+    table.insert(records, version_records[1])
   end
   table.sort(records, function(left, right)
     return compare_versions(left.version, right.version) > 0
   end)
 
   records_cache = records
-  return records_cache
+  records_by_version_cache = by_version
+  return records_cache, records_by_version_cache
+end
+
+local function tag_records()
+  local records = load_tag_records()
+  return records
+end
+
+local function records_for_version(version)
+  local _, by_version = load_tag_records()
+  return by_version[version] or {}
 end
 
 function xcode.available_versions()
@@ -142,13 +155,15 @@ function xcode.available_versions()
   return result
 end
 
-function xcode.record_for_version(version)
-  for _, record in ipairs(tag_records()) do
-    if record.version == version then
+function xcode.record_for_version(version, search_path)
+  local records = records_for_version(version)
+  for _, record in ipairs(records) do
+    if xcode.find_developer_dir(record.build, search_path) ~= nil then
       return record
     end
   end
-  return nil
+
+  return records[1]
 end
 
 function xcode.latest_stable_version()
@@ -177,13 +192,13 @@ function xcode.resolve_version(version)
   return nil
 end
 
-function xcode.build_for_version(version)
+function xcode.build_for_version(version, search_path)
   local resolved_version = xcode.resolve_version(version)
   if resolved_version == nil then
     error("No Xcode version exists that corresponds to " .. version .. ".")
   end
 
-  local record = xcode.record_for_version(resolved_version)
+  local record = xcode.record_for_version(resolved_version, search_path)
   if record == nil then
     error("No Xcode version exists that corresponds to " .. version .. ".")
   end
