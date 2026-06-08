@@ -50,7 +50,7 @@ Using version `26` will select the latest stable `26.x.y` release known by the p
 
 ```console
 foo@bar:~$ mise use xcode@26
-mise ~/foo/bar/.mise.toml tools: xcode@26.5.0
+mise ~/foo/bar/mise.toml tools: xcode@26.5.0
 ```
 
 ### Selecting Xcodes within a specific search path
