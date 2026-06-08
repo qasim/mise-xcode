@@ -59,6 +59,39 @@ local function compare_versions(left, right)
   return left_prerelease > right_prerelease and 1 or -1
 end
 
+local function compare_natural(left, right)
+  local left_tokens = {}
+  local right_tokens = {}
+
+  for token in tostring(left):gmatch("%d+%D*") do
+    local number, suffix = token:match("^(%d+)(%D*)$")
+    table.insert(left_tokens, { number = tonumber(number), suffix = suffix })
+  end
+  for token in tostring(right):gmatch("%d+%D*") do
+    local number, suffix = token:match("^(%d+)(%D*)$")
+    table.insert(right_tokens, { number = tonumber(number), suffix = suffix })
+  end
+
+  for i = 1, math.max(#left_tokens, #right_tokens) do
+    local left_token = left_tokens[i]
+    local right_token = right_tokens[i]
+    if left_token == nil then
+      return -1
+    end
+    if right_token == nil then
+      return 1
+    end
+    if left_token.number ~= right_token.number then
+      return left_token.number - right_token.number
+    end
+    if left_token.suffix ~= right_token.suffix then
+      return left_token.suffix > right_token.suffix and 1 or -1
+    end
+  end
+
+  return 0
+end
+
 local function tag_records()
   if records_cache ~= nil then
     return records_cache
@@ -74,11 +107,14 @@ local function tag_records()
     if tag ~= nil then
       local version, build = tag:match("^(.+)%+(.+)$")
       if version ~= nil and build ~= nil then
-        by_version[version] = {
-          version = version,
-          build = build,
-          tag = tag,
-        }
+        local existing_record = by_version[version]
+        if existing_record == nil or compare_natural(build, existing_record.build) > 0 then
+          by_version[version] = {
+            version = version,
+            build = build,
+            tag = tag,
+          }
+        end
       end
     end
   end
