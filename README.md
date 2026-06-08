@@ -65,7 +65,7 @@ xcode = {version='16.0.0', search_path='/Applications'}
 
 ## Troubleshooting
 
-### ```No Xcode <version> installation found inside search path.```
+### ```No Xcode <version> installation found within search path.```
 
 The plugin was not able to find a valid Xcode installation for the provided version.
 
