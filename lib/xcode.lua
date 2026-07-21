@@ -19,6 +19,34 @@ local function shell_quote(value)
   return "'" .. tostring(value):gsub("'", "'\\''") .. "'"
 end
 
+local function command_succeeds(command)
+  return pcall(function()
+    cmd.exec(command, { timeout = 10000 })
+  end)
+end
+
+local function path_exists(path)
+  return command_succeeds("test -e " .. shell_quote(path)) or command_succeeds("test -L " .. shell_quote(path))
+end
+
+local function path_is_directory(path)
+  return command_succeeds("test -d " .. shell_quote(path))
+end
+
+local function path_is_symlink(path)
+  return command_succeeds("test -L " .. shell_quote(path))
+end
+
+local function symlink_target(path)
+  local ok, target = pcall(function()
+    return cmd.exec("readlink " .. shell_quote(path), { timeout = 10000 })
+  end)
+  if ok then
+    return trim(target)
+  end
+  return nil
+end
+
 local function split_lines(value)
   local lines = {}
   for line in tostring(value or ""):gmatch("[^\r\n]+") do
@@ -265,15 +293,6 @@ function xcode.installation_hint(record)
   return record.installation_url
 end
 
-function xcode.record_for_version_and_build(version, build)
-  for _, record in ipairs(records_for_version(version)) do
-    if record.build == build then
-      return record
-    end
-  end
-  return nil
-end
-
 function xcode.require_developer_dir(version, build, search_path, record)
   local developer_dir = xcode.find_developer_dir(build, search_path)
   if developer_dir == nil then
@@ -287,16 +306,57 @@ function xcode.require_developer_dir(version, build, search_path, record)
   return developer_dir
 end
 
-function xcode.write_build_file(path, build)
-  cmd.exec("mkdir -p " .. shell_quote(path), { timeout = 10000 })
-  cmd.exec("printf %s " .. shell_quote(build) .. " > " .. shell_quote(path .. "/BUILD"), {
-    timeout = 10000,
-  })
+function xcode.write_developer_dir_install(path, developer_dir)
+  local parent = path:match("^(.*)/[^/]+$")
+  if parent ~= nil then
+    cmd.exec("mkdir -p " .. shell_quote(parent), { timeout = 10000 })
+  end
+
+  if path_is_symlink(path) then
+    cmd.exec("rm -f " .. shell_quote(path), { timeout = 10000 })
+  elseif path_is_directory(path) then
+    cmd.exec("rmdir " .. shell_quote(path), { timeout = 10000 })
+  elseif path_exists(path) then
+    cmd.exec("rm -f " .. shell_quote(path), { timeout = 10000 })
+  end
+
+  cmd.exec("ln -s " .. shell_quote(developer_dir) .. " " .. shell_quote(path), { timeout = 10000 })
 end
 
 function xcode.read_build_file(path)
   local file = require("file")
   return trim(file.read(path .. "/BUILD"))
+end
+
+function xcode.developer_dir_for_install(path, search_path)
+  if path_is_symlink(path) then
+    return symlink_target(path) or path
+  end
+
+  -- Migrate installs created before the install path became a symlink. The
+  -- broken-link fallback deliberately keeps DEVELOPER_DIR version-specific,
+  -- so a removed Xcode cannot silently fall back to another installation.
+  local link_path = path .. "/Developer"
+  if path_exists(link_path) then
+    return symlink_target(link_path) or link_path
+  end
+
+  local build_ok, build = pcall(xcode.read_build_file, path)
+  local developer_dir = nil
+  if build_ok and build ~= "" then
+    local find_ok, result = pcall(xcode.find_developer_dir, build, search_path)
+    if find_ok then
+      developer_dir = result
+    end
+  end
+
+  local target = developer_dir or (path .. "/Xcode-not-installed")
+  command_succeeds("ln -s " .. shell_quote(target) .. " " .. shell_quote(link_path))
+
+  if path_exists(link_path) then
+    return symlink_target(link_path) or link_path
+  end
+  return developer_dir or link_path
 end
 
 function xcode.context_field(ctx, key, fallback)

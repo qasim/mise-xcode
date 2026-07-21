@@ -7,6 +7,6 @@ function PLUGIN:PostInstall(ctx)
   local search_path = options.search_path or "/"
   local build, resolved_version, record = xcode.build_for_version(version, search_path)
 
-  xcode.require_developer_dir(resolved_version, build, search_path, record)
-  xcode.write_build_file(sdk_info.path, build)
+  local developer_dir = xcode.require_developer_dir(resolved_version, build, search_path, record)
+  xcode.write_developer_dir_install(sdk_info.path, developer_dir)
 end

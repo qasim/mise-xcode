@@ -71,6 +71,12 @@ The plugin was not able to find a valid Xcode installation for the provided vers
 
 Make sure you have it installed and it's available inside the search path. By default, this plugin looks for Xcode installations with a search path of `/`, i.e. anywhere on your disk.
 
+The plugin links each mise installation to the selected Xcode's `Contents/Developer` directory. If you move or rename the Xcode application after selecting it, refresh the link:
+
+```bash
+mise install --force xcode@<version>
+```
+
 ### ```No Xcode version exists that corresponds to <version>.```
 
 According to the plugin, this Xcode version doesn't exist at all.
