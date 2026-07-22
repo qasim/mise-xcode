@@ -55,6 +55,34 @@ local function split_lines(value)
   return lines
 end
 
+local function path_is_within(path, parent)
+  local normalized_parent = tostring(parent or "/"):gsub("/+$", "")
+  if normalized_parent == "" then
+    normalized_parent = "/"
+  end
+
+  return normalized_parent == "/"
+    or path == normalized_parent
+    or path:sub(1, #normalized_parent + 1) == normalized_parent .. "/"
+end
+
+local function selected_xcode_bundle_path(search_path)
+  local ok, output = pcall(function()
+    return cmd.exec("/usr/bin/xcode-select -p", { timeout = 10000 })
+  end)
+  if not ok then
+    return nil
+  end
+
+  local developer_dir = trim(output):gsub("/+$", "")
+  local bundle_path = developer_dir:match("^(.*%.app)/Contents/Developer$")
+  if bundle_path == nil or not path_is_within(bundle_path, search_path or "/") then
+    return nil
+  end
+
+  return bundle_path
+end
+
 local function parse_version(version)
   local base, prerelease = version:match("^([%d%.]+)%-?(.*)$")
   local parts = {}
@@ -256,6 +284,14 @@ local function product_build_version(bundle_path)
 end
 
 function xcode.find_developer_dir(build, search_path)
+  local selected_bundle_path = selected_xcode_bundle_path(search_path or "/")
+  if selected_bundle_path ~= nil then
+    local ok, selected_build = pcall(product_build_version, selected_bundle_path)
+    if ok and selected_build == build then
+      return selected_bundle_path .. "/Contents/Developer"
+    end
+  end
+
   for _, bundle_path in ipairs(xcode_bundle_paths(search_path or "/")) do
     if product_build_version(bundle_path) == build then
       return bundle_path .. "/Contents/Developer"
