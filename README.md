@@ -44,6 +44,19 @@ This resolves to the latest stable Xcode version known by the plugin.
 xcode = '16.0.0'
 ```
 
+Pre-releases are written as their tags in [qasim/Xcode](https://github.com/qasim/Xcode) are, such as `27.3.0-beta.2`, `27.2.0-rc` or `11.5.0-gm-seed`. Other spellings of the same version work too: `27.2-rc.1` is `27.2.0-rc`, and `11.5.0-seed` is `11.5.0-gm-seed`.
+
+### Using an .xcode-version file
+
+The plugin reads the `.xcode-version` file that xcodes and fastlane use, once you turn it on in mise:
+
+```toml
+[settings]
+idiomatic_version_file_enable_tools = ['xcode']
+```
+
+The file holds one version, written as xcodes reads it, such as `26.0` or `14.0b6`, or as Apple writes it, such as `14.0 Beta 6`. As with xcodes, the version is exact: `26` means Xcode 26.0.0, not the newest Xcode 26. A version in `mise.toml` takes precedence over the file.
+
 ### Selecting the latest stable version of a major Xcode
 
 Using version `26` will select the latest stable `26.x.y` release known by the plugin.
@@ -75,7 +88,7 @@ xcodes = 'latest'
 xcode = '26.2.0'
 ```
 
-The first download may ask you to sign in to your Apple ID, so run it in a terminal. Without a terminal, such as in CI or from an agent, set `XCODES_USERNAME` and `XCODES_PASSWORD`, or sign in once from a terminal first; xcodes remembers the session.
+The first download may ask you to sign in to your Apple ID, so run it in a terminal. Without a terminal, such as in CI or from an agent, set `XCODES_USERNAME` and `XCODES_PASSWORD`, or sign in once from a terminal first; xcodes remembers the session. If you have a session from `fastlane spaceauth`, set it as `FASTLANE_SESSION`, and xcodes signs in with it.
 
 After installing, and whenever it selects an Xcode that has not been set up yet, the plugin accepts the license and installs the packages Xcode would otherwise ask for on first launch, without opening Xcode. This asks for your administrator password, so it also needs a terminal the first time.
 

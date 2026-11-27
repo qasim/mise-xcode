@@ -8,4 +8,6 @@ PLUGIN = {
   minRuntimeVersion = "0.3.0",
   -- When a project lists xcodes, it is installed first and used to download Xcode.
   depends = { "xcodes" },
+  -- Read when idiomatic_version_file_enable_tools includes xcode.
+  legacyFilenames = { ".xcode-version" },
 }

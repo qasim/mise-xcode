@@ -253,6 +253,33 @@ local function tag_version(written)
   return version
 end
 
+-- Pre-release names as Apple writes them, such as "27.2 Release Candidate 2".
+local apple_labels = { beta = "beta", ["release candidate"] = "rc", rc = "rc", ["gm seed"] = "gm-seed" }
+
+-- The version in an .xcode-version file, which xcodes and fastlane read. It
+-- is exact, as xcodes reads it: "26" is 26.0.0. Besides their "14.0b6", it
+-- may be written as Apple does, "14.0 Beta 6", or as the plugin's versions
+-- are. Returns nil for anything else.
+function xcode.version_file_version(content)
+  local text = util.trim(tostring(content or ""):match("^%s*([^\r\n]*)")):gsub("^[Xx]code%s+", "")
+
+  local number, count = text:match("^(%d+[%.%d]*)[bB](%d*)$")
+  if number ~= nil then
+    text = number .. "-beta" .. (count ~= "" and ("." .. count) or "")
+  end
+
+  local apple_number, name, apple_count = text:match("^(%d+[%.%d]*)%s+(%a[%a ]-)%s*(%d*)$")
+  if apple_number ~= nil then
+    local label = apple_labels[name:lower()]
+    if label == nil then
+      return nil
+    end
+    text = apple_number .. "-" .. label .. (apple_count ~= "" and ("." .. apple_count) or "")
+  end
+
+  return tag_version(text)
+end
+
 -- mise matches prefixes such as "27" and resolves "latest" itself, so a
 -- version reaches the plugin either as tagged or spelled another way.
 function xcode.resolve_version(written)
