@@ -3,7 +3,8 @@
 -- The plugin reaches the outside world only through mise's modules (cmd, file,
 -- http, json) and a few Lua functions (print, io.popen, os.execute,
 -- os.getenv). This replaces them with a world described in a test: the Xcodes
--- on disk, the selected one, the tags in qasim/Xcode, and what xcodes knows.
+-- on disk, the selected one, the releases qasim/Xcode lists, and what xcodes
+-- knows.
 -- Shell commands are understood as far as the plugin uses them; any other
 -- command fails the test, so a new command has to be modeled on purpose.
 --
@@ -15,6 +16,9 @@
 local json = require("support.json")
 
 local mac = {}
+
+-- Where qasim/Xcode publishes its list of releases.
+mac.releases_url = "https://raw.githubusercontent.com/qasim/Xcode/main/releases.json"
 
 local plugin_modules = { "cmd", "file", "http", "json", "install", "system", "util", "xcode" }
 local originals = { print = print, popen = io.popen, execute = os.execute, getenv = os.getenv }
@@ -111,7 +115,8 @@ local World = {}
 World.__index = World
 
 -- Describes a Mac. Every field is optional:
---   tags      tags of qasim/Xcode, such as "27.2.0+27B52"
+--   releases  the releases qasim/Xcode lists, newest first, each as
+--             "27.2.0+27B52" or { version, build, date, url }
 --   apps      Xcode apps by path: { build = "27B52", set_up = true,
 --             team = "59GAB85EFG", gatekeeper = true, indexed = true }
 --   selected  the app xcode-select points at
@@ -139,7 +144,6 @@ function mac.new(description)
     apps = {},
     paths = {},
     archives = {},
-    tags = description.tags or {},
     selected = description.selected,
     xcodes = description.xcodes,
     terminal = description.terminal or false,
@@ -150,6 +154,7 @@ function mac.new(description)
     env = description.env or {},
     home = "/Users/me",
   }, World)
+  world:publish(description.releases or {})
   world.env.HOME = world.env.HOME or world.home
   world.env.MISE_CACHE_DIR = world.env.MISE_CACHE_DIR or "/cache"
   for path, app in pairs(description.apps or {}) do
@@ -174,6 +179,28 @@ function mac.new(description)
   end
   world:install()
   return world
+end
+
+-- Serves releases.json, as qasim/Xcode publishes it.
+function World:publish(releases)
+  local entries = {}
+  for _, release in ipairs(releases) do
+    if type(release) == "string" then
+      local version, build = release:match("^(.+)%+(.+)$")
+      release = { version = version, build = build }
+    end
+    table.insert(
+      entries,
+      string.format(
+        '{"version": "%s", "build": "%s", "date": "%s", "url": "%s"}',
+        release.version,
+        release.build,
+        release.date or "2026-01-01",
+        release.url or ("https://download.developer.apple.com/Developer_Tools/Xcode_" .. release.version .. ".xip")
+      )
+    )
+  end
+  self.http[mac.releases_url] = "[" .. table.concat(entries, ", ") .. "]"
 end
 
 function World:record(text)
@@ -392,12 +419,6 @@ function World:simple(argv, mode, cwd)
     end
     table.sort(found)
     return table.concat(found, "\n"), 0, cwd
-  elseif program == "git" then
-    local lines = {}
-    for _, tag in ipairs(self.tags) do
-      table.insert(lines, "sha-" .. tag .. "\trefs/tags/" .. tag)
-    end
-    return table.concat(lines, "\n"), 0, cwd
   elseif program == "command" then
     if self.xcodes == nil then
       return "", 1, cwd
@@ -597,6 +618,11 @@ function World:install()
   package.preload.http = function()
     return {
       get = function(options)
+        -- mise's http functions pause the hook while the request runs. Lua 5.1
+        -- can't pause inside pcall, so neither can the plugin's requests.
+        if coroutine.running() ~= nil then
+          coroutine.yield()
+        end
         local body = world.http[options.url]
         if body == nil then
           return { status_code = 404, body = "" }
@@ -659,11 +685,23 @@ local hook_files = {
   PreInstall = "pre_install",
 }
 
--- Runs a hook the way mise does: load its file, then call it with a context.
+-- Runs a hook the way mise does: load its file, then call it with a context,
+-- in a coroutine that mise's http functions pause.
 function World:hook(name, ctx)
   PLUGIN = { name = "xcode" }
   dofile("hooks/" .. hook_files[name] .. ".lua")
-  return PLUGIN[name](PLUGIN, ctx or {})
+  local running = coroutine.create(function()
+    return PLUGIN[name](PLUGIN, ctx or {})
+  end)
+  while true do
+    local results = { coroutine.resume(running) }
+    if not results[1] then
+      error(results[2], 0)
+    end
+    if coroutine.status(running) == "dead" then
+      return unpack(results, 2)
+    end
+  end
 end
 
 -- Loads one of the plugin's modules against this world.

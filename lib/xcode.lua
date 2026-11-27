@@ -8,9 +8,8 @@ local trim, shell_quote, split_lines = util.trim, util.shell_quote, util.split_l
 
 local xcode = {}
 
-xcode.github_repo = "https://github.com/qasim/Xcode"
-xcode.github_tags_url = xcode.github_repo .. ".git"
-xcode.github_api_repo_url = "https://api.github.com/repos/qasim/Xcode"
+-- Every Xcode release, newest first, with its build, date and download URL.
+xcode.releases_url = "https://raw.githubusercontent.com/qasim/Xcode/main/releases.json"
 
 local records_cache = nil
 local records_by_version_cache = nil
@@ -71,125 +70,40 @@ local function selected_xcode_bundle_path(search_path)
   return bundle_path
 end
 
-local function parse_version(version)
-  local base, prerelease = version:match("^([%d%.]+)%-?(.*)$")
-  local parts = {}
-  for part in tostring(base or ""):gmatch("%d+") do
-    table.insert(parts, tonumber(part))
-  end
-  return parts, prerelease ~= "" and prerelease or nil
-end
-
-local function compare_versions(left, right)
-  local left_parts, left_prerelease = parse_version(left)
-  local right_parts, right_prerelease = parse_version(right)
-
-  for i = 1, math.max(#left_parts, #right_parts) do
-    local left_part = left_parts[i] or 0
-    local right_part = right_parts[i] or 0
-    if left_part ~= right_part then
-      return left_part - right_part
-    end
-  end
-
-  if left_prerelease == nil and right_prerelease ~= nil then
-    return 1
-  end
-  if left_prerelease ~= nil and right_prerelease == nil then
-    return -1
-  end
-  if left_prerelease == nil and right_prerelease == nil then
-    return 0
-  end
-  if left_prerelease == right_prerelease then
-    return 0
-  end
-  return left_prerelease > right_prerelease and 1 or -1
-end
-
-local function compare_natural(left, right)
-  local left_tokens = {}
-  local right_tokens = {}
-
-  for token in tostring(left):gmatch("%d+%D*") do
-    local number, suffix = token:match("^(%d+)(%D*)$")
-    table.insert(left_tokens, { number = tonumber(number), suffix = suffix })
-  end
-  for token in tostring(right):gmatch("%d+%D*") do
-    local number, suffix = token:match("^(%d+)(%D*)$")
-    table.insert(right_tokens, { number = tonumber(number), suffix = suffix })
-  end
-
-  for i = 1, math.max(#left_tokens, #right_tokens) do
-    local left_token = left_tokens[i]
-    local right_token = right_tokens[i]
-    if left_token == nil then
-      return -1
-    end
-    if right_token == nil then
-      return 1
-    end
-    if left_token.number ~= right_token.number then
-      return left_token.number - right_token.number
-    end
-    if left_token.suffix ~= right_token.suffix then
-      return left_token.suffix > right_token.suffix and 1 or -1
-    end
-  end
-
-  return 0
-end
-
-local function load_tag_records()
+local function load_records()
   if records_cache ~= nil then
     return records_cache, records_by_version_cache
   end
 
-  local output = cmd.exec("git ls-remote --tags --refs " .. shell_quote(xcode.github_tags_url), {
-    timeout = 30,
-  })
+  -- mise's http functions pause the plugin while they run, which Lua 5.1
+  -- can't do inside pcall, so only the decoding is guarded.
+  local response = http.get({ url = xcode.releases_url })
+  local ok, releases = false, nil
+  if response ~= nil and response.status_code == 200 then
+    ok, releases = pcall(json.decode, response.body)
+  end
+  if not ok or type(releases) ~= "table" then
+    error("Could not read the list of Xcode releases from " .. xcode.releases_url .. ".", 0)
+  end
+
+  -- Each version belongs to one build.
   local by_version = {}
-
-  for _, line in ipairs(split_lines(output)) do
-    local tag_sha = line:match("^([^%s]+)%s+")
-    local tag = line:match("refs/tags/(.+)$")
-    if tag ~= nil then
-      local version, build = tag:match("^(.+)%+(.+)$")
-      if version ~= nil and build ~= nil then
-        by_version[version] = by_version[version] or {}
-        table.insert(by_version[version], {
-          version = version,
-          build = build,
-          tag = tag,
-          tag_sha = tag_sha,
-        })
-      end
-    end
+  for _, release in ipairs(releases) do
+    by_version[release.version] = { release }
   end
 
-  local records = {}
-  for _, version_records in pairs(by_version) do
-    table.sort(version_records, function(left, right)
-      return compare_natural(left.build, right.build) > 0
-    end)
-    table.insert(records, version_records[1])
-  end
-  table.sort(records, function(left, right)
-    return compare_versions(left.version, right.version) > 0
-  end)
-
-  records_cache = records
+  records_cache = releases
   records_by_version_cache = by_version
   return records_cache, records_by_version_cache
 end
 
 local function tag_records()
-  local records = load_tag_records()
+  local records = load_records()
   return records
 end
 
 local function records_for_version(version)
-  local _, by_version = load_tag_records()
+  local _, by_version = load_records()
   return by_version[version] or {}
 end
 
@@ -199,6 +113,8 @@ function xcode.available_versions()
     table.insert(result, {
       version = record.version,
       note = "build " .. record.build,
+      -- For mise's minimum_release_age and --before.
+      created_at = record.date and (record.date .. "T00:00:00Z") or nil,
     })
   end
   return result
@@ -369,31 +285,7 @@ function xcode.find_developer_dir(build, search_path, install_dir)
 end
 
 function xcode.installation_hint(record)
-  if record == nil or record.tag_sha == nil then
-    return nil
-  end
-  if record.installation_url ~= nil then
-    return record.installation_url
-  end
-
-  local resp, err = http.get({
-    url = xcode.github_api_repo_url .. "/git/tags/" .. record.tag_sha,
-  })
-  if err ~= nil or resp == nil or resp.status_code ~= 200 then
-    return nil
-  end
-
-  local ok, body = pcall(function()
-    return json.decode(resp.body)
-  end)
-  if not ok or body == nil then
-    return nil
-  end
-
-  local message = body.message
-  local url = tostring(message or ""):match("https://%S+")
-  record.installation_url = url
-  return record.installation_url
+  return record and record.url or nil
 end
 
 -- suggest_xcodes says whether adding xcodes would let the plugin download the

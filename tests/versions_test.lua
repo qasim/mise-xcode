@@ -16,12 +16,12 @@ local xcodes = {
 }
 
 local function world()
-  local tags, apps = {}, {}
+  local releases, apps = {}, {}
   for tag, path in pairs(xcodes) do
-    table.insert(tags, tag)
+    table.insert(releases, tag)
     apps[path] = { build = tag:match("%+(.+)$") }
   end
-  return mac.new({ tags = tags, apps = apps })
+  return mac.new({ releases = releases, apps = apps })
 end
 
 local spellings = {

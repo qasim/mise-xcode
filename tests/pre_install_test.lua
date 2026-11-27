@@ -43,7 +43,7 @@ end
 
 test("selects an installed Xcode that is set up, and changes nothing", function()
   local world = mac.new({
-    tags = { "27.2.0+27B52" },
+    releases = { "27.2.0+27B52" },
     apps = { [installed] = { build = "27B52" } },
     xcodes = { saved = { xcode_27_2() } },
   })
@@ -55,7 +55,7 @@ test("selects an installed Xcode that is set up, and changes nothing", function(
 end)
 
 test("downloads a missing Xcode with xcodes, then unpacks, checks and sets it up", function()
-  local world = mac.new({ tags = { "27.2.0+27B52" }, xcodes = { saved = { xcode_27_2() } } })
+  local world = mac.new({ releases = { "27.2.0+27B52" }, xcodes = { saved = { xcode_27_2() } } })
 
   local result = world:hook("PreInstall", { version = "27.2.0" })
 
@@ -70,7 +70,7 @@ test("downloads a missing Xcode with xcodes, then unpacks, checks and sets it up
 end)
 
 test("refreshes xcodes' list when it does not have the release yet", function()
-  local world = mac.new({ tags = { "27.2.0+27B52" }, xcodes = { saved = {}, current = { xcode_27_2() } } })
+  local world = mac.new({ releases = { "27.2.0+27B52" }, xcodes = { saved = {}, current = { xcode_27_2() } } })
 
   world:hook("PreInstall", { version = "27.2.0" })
 
@@ -87,7 +87,7 @@ end)
 test("downloads from Apple's list a release xcodereleases.com does not list yet, then restores xcodes' list", function()
   local beta_cache = "/cache/xcode-downloads/27C5035i"
   local world = mac.new({
-    tags = { "27.3.0-beta.2+27C5035i" },
+    releases = { "27.3.0-beta.2+27C5035i" },
     xcodes = { saved = {}, apple = { { name = "27.3.0 Beta 2", build = "27C5035i", file = "Xcode_27.3_beta_2.aea" } } },
   })
 
@@ -113,7 +113,7 @@ test("downloads from Apple's list a release xcodereleases.com does not list yet,
 end)
 
 test("refuses a download whose build is not the one asked for, and deletes it", function()
-  local world = mac.new({ tags = { "27.2.0+27B52" }, xcodes = { saved = { xcode_27_2({ downloads = "27B50" }) } } })
+  local world = mac.new({ releases = { "27.2.0+27B52" }, xcodes = { saved = { xcode_27_2({ downloads = "27B50" }) } } })
 
   check.fails(function()
     world:hook("PreInstall", { version = "27.2.0" })
@@ -124,7 +124,7 @@ test("refuses a download whose build is not the one asked for, and deletes it", 
 end)
 
 test("refuses a download that is not signed by Apple", function()
-  local world = mac.new({ tags = { "27.2.0+27B52" }, xcodes = { saved = { xcode_27_2({ team = "OTHERTEAM1" }) } } })
+  local world = mac.new({ releases = { "27.2.0+27B52" }, xcodes = { saved = { xcode_27_2({ team = "OTHERTEAM1" }) } } })
 
   check.fails(function()
     world:hook("PreInstall", { version = "27.2.0" })
@@ -133,7 +133,8 @@ test("refuses a download that is not signed by Apple", function()
 end)
 
 test("refuses a download changed after Apple signed it", function()
-  local world = mac.new({ tags = { "27.2.0+27B52" }, xcodes = { saved = { xcode_27_2({ signature = "broken" }) } } })
+  local world =
+    mac.new({ releases = { "27.2.0+27B52" }, xcodes = { saved = { xcode_27_2({ signature = "broken" }) } } })
 
   check.fails(function()
     world:hook("PreInstall", { version = "27.2.0" })
@@ -142,7 +143,7 @@ test("refuses a download changed after Apple signed it", function()
 end)
 
 test("explains how to sign in when xcodes needs it and no one can answer", function()
-  local world = mac.new({ tags = { "27.2.0+27B52" }, xcodes = { saved = { xcode_27_2() }, signed_in = false } })
+  local world = mac.new({ releases = { "27.2.0+27B52" }, xcodes = { saved = { xcode_27_2() }, signed_in = false } })
 
   check.fails(
     function()
@@ -154,7 +155,7 @@ end)
 
 test("lets the user sign in when xcodes needs it in a terminal", function()
   local world = mac.new({
-    tags = { "27.2.0+27B52" },
+    releases = { "27.2.0+27B52" },
     xcodes = { saved = { xcode_27_2() }, signed_in = false },
     terminal = true,
   })
@@ -174,9 +175,12 @@ end)
 
 test("without xcodes, says where to download a missing Xcode", function()
   local world = mac.new({
-    tags = { "27.2.0+27B52" },
-    http = {
-      ["https://api.github.com/repos/qasim/Xcode/git/tags/sha-27.2.0+27B52"] = '{"message": "https://download.developer.apple.com/Developer_Tools/Xcode_27.2/Xcode_27.2.xip"}',
+    releases = {
+      {
+        version = "27.2.0",
+        build = "27B52",
+        url = "https://download.developer.apple.com/Developer_Tools/Xcode_27.2/Xcode_27.2.xip",
+      },
     },
   })
 
@@ -191,7 +195,7 @@ end)
 
 test("with install = false, neither downloads nor sets up", function()
   local world = mac.new({
-    tags = { "27.2.0+27B52" },
+    releases = { "27.2.0+27B52" },
     apps = { [installed] = { build = "27B52", set_up = false } },
     xcodes = { saved = { xcode_27_2() } },
   })
@@ -204,7 +208,7 @@ end)
 
 test("signs xcodes in with fastlane's session when FASTLANE_SESSION is set", function()
   local world = mac.new({
-    tags = { "27.2.0+27B52" },
+    releases = { "27.2.0+27B52" },
     xcodes = { saved = { xcode_27_2() }, signed_in = false },
     env = { FASTLANE_SESSION = "---\n- !ruby/object:HTTP::Cookie" },
   })
