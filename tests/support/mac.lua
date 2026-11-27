@@ -119,7 +119,14 @@ World.__index = World
 --   releases  the releases qasim/Xcode lists, newest first, each as
 --             "27.2.0+27B52" or { version, build, date, url }
 --   apps      Xcode apps by path: { build = "27B52", set_up = true,
---             team = "59GAB85EFG", gatekeeper = true, indexed = true }
+--             team = "59GAB85EFG", gatekeeper = true, indexed = true,
+--             sdks = { iphoneos = { version = "27.2", runtime = "23C54" } },
+--             components = { metalToolchain = { build = "17C48" } } }
+--             An SDK names the simulator runtime it uses; a component is
+--             missing until `installed = true` or it's downloaded.
+--   runtimes  simulator runtimes installed on the Mac:
+--             { platform = "iOS", version = "27.2", build = "23C54" }
+--   read_only folders the user can't write to
 --   selected  the app xcode-select points at
 --   xcodes    nil when xcodes is missing, else:
 --             saved     the releases in xcodes' saved list: { name, build }
@@ -166,7 +173,14 @@ function mac.new(description)
       gatekeeper = app.gatekeeper ~= false,
       indexed = app.indexed ~= false,
       identifier = app.identifier or "com.apple.dt.Xcode",
+      sdks = app.sdks or {},
+      components = app.components or {},
     }
+  end
+  world.runtimes = description.runtimes or {}
+  world.read_only = {}
+  for _, folder in ipairs(description.read_only or {}) do
+    world.read_only[folder] = true
   end
   for path, kind in pairs(description.paths or {}) do
     world.paths[path] = kind
@@ -349,7 +363,7 @@ function World:simple(argv, mode, cwd)
         return path == "/usr/bin/archiveutil"
       end,
       ["-w"] = function()
-        return not (self.read_only or {})[path]
+        return not self.read_only[path]
       end,
       ["-t"] = function()
         return self.terminal
@@ -461,15 +475,94 @@ function World:simple(argv, mode, cwd)
     local app = self:app_for(argv[#argv])
     return "", app.gatekeeper and 0 or 3, cwd
   elseif program == "/usr/bin/xcodebuild" then
-    local app = self:app_for(env.DEVELOPER_DIR)
-    if argv[2] == "-checkFirstLaunchStatus" then
-      return "", (app and app.set_up) and 0 or 69, cwd
-    end
+    return self:xcodebuild(argv, env, cwd)
+  elseif program == "/usr/bin/xcrun" then
+    return self:simctl(argv, env, cwd)
   elseif program == "/usr/bin/sudo" then
     return self:sudo(argv, mode, cwd)
   end
 
   error("The fake Mac does not know this command: " .. line(argv), 0)
+end
+
+-- Simulator platforms by the name simctl gives them, and their SDK names.
+local simulators = {
+  iOS = { identifier = "com.apple.platform.iphonesimulator", sdk = "iphoneos" },
+  watchOS = { identifier = "com.apple.platform.watchsimulator", sdk = "watchos" },
+  tvOS = { identifier = "com.apple.platform.appletvsimulator", sdk = "appletvos" },
+  visionOS = { identifier = "com.apple.platform.xrsimulator", sdk = "xros" },
+}
+
+-- xcodebuild: whether Xcode is set up, its components, and downloads.
+function World:xcodebuild(argv, env, cwd)
+  local app = self:app_for(env.DEVELOPER_DIR)
+  local flag = argv[2]
+  if flag == "-checkFirstLaunchStatus" then
+    return "", (app and app.set_up) and 0 or 69, cwd
+  elseif flag == "-showComponent" then
+    local component = app.components[argv[3]]
+    if component == nil then
+      return "", 1, cwd
+    end
+    local status = component.installed and "installed" or "uninstalled"
+    return string.format('{"status": "%s", "buildVersion": "%s"}', status, component.build), 0, cwd
+  elseif flag == "-downloadComponent" then
+    self:record("$ xcodebuild -downloadComponent " .. argv[3])
+    app.components[argv[3]].installed = true
+    return "", 0, cwd
+  elseif flag == "-downloadPlatform" then
+    local shown = { "xcodebuild" }
+    for index = 2, #argv do
+      table.insert(shown, argv[index])
+    end
+    self:record("$ " .. line(shown))
+    -- Without -buildVersion, the runtime this Xcode's SDK uses.
+    local version, build = argv[5], nil
+    for sdk_name, sdk in pairs(app.sdks) do
+      if sdk_name == simulators[argv[3]].sdk and version == nil then
+        version, build = sdk.version, sdk.runtime
+      end
+    end
+    table.insert(self.runtimes, { platform = argv[3], version = version, build = build or ("runtime-" .. version) })
+    return "", 0, cwd
+  end
+  error("The fake Mac does not know this xcodebuild command: " .. line(argv), 0)
+end
+
+-- xcrun simctl runtime list -j, and match list -j.
+function World:simctl(argv, env, cwd)
+  local app = self:app_for(env.DEVELOPER_DIR)
+  local entries = {}
+  if argv[4] == "list" then
+    for index, runtime in ipairs(self.runtimes) do
+      table.insert(
+        entries,
+        string.format(
+          '"runtime-%d": {"platformIdentifier": "%s", "version": "%s", "build": "%s", "state": "Ready"}',
+          index,
+          simulators[runtime.platform].identifier,
+          runtime.version,
+          runtime.build
+        )
+      )
+    end
+  elseif argv[4] == "match" then
+    for sdk_name, sdk in pairs(app.sdks) do
+      table.insert(
+        entries,
+        string.format(
+          '"%s%s": {"sdkVersion": "%s", "chosenRuntimeBuild": "%s"}',
+          sdk_name,
+          sdk.version,
+          sdk.version,
+          sdk.runtime
+        )
+      )
+    end
+  else
+    error("The fake Mac does not know this simctl command: " .. line(argv), 0)
+  end
+  return "{" .. table.concat(entries, ", ") .. "}", 0, cwd
 end
 
 -- Unpacks an archive into the working directory, as xip and archiveutil do.
