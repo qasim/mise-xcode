@@ -14,7 +14,7 @@ local trim, shell_quote, split_lines = util.trim, util.shell_quote, util.split_l
 
 local install = {}
 
--- What Xcode's signature must say: Apple signed it, and it is Xcode.
+-- Xcode is signed by Apple as com.apple.dt.Xcode.
 local xcode_requirement = '=anchor apple and identifier "com.apple.dt.Xcode"'
 
 -- Ends the output of commands whose exit code the plugin reads from it, as
@@ -278,8 +278,8 @@ local function download_with_xcodes(xcodes_path, version, build, directory, step
       .. ") with xcodes"
       .. (from_apple and ", from Apple's list, as xcodereleases.com does not list it yet" or "")
   )
-  -- A session made with `fastlane spaceauth` lets xcodes sign in without anyone
-  -- answering a prompt, as in CI.
+  -- A session from `fastlane spaceauth` lets xcodes sign in without a prompt,
+  -- such as in CI.
   local fastlane_session = os.getenv("FASTLANE_SESSION")
   local command = shell_quote(xcodes_path)
     .. " download "
@@ -390,8 +390,8 @@ local function verify_bundle(bundle_path, version, build)
     error(refused .. "the download is build " .. tostring(actual_build) .. ".", 0)
   end
 
-  -- Unlike reading who signed it, verifying also fails for an app changed after
-  -- it was signed. It takes about 15 seconds.
+  -- Checking the signature, not just who signed it, also catches an app that
+  -- was changed after it was signed. It takes about 15 seconds.
   local signed = succeeds(
     system.codesign .. " --verify --strict -R " .. shell_quote(xcode_requirement) .. " " .. shell_quote(bundle_path),
     {}

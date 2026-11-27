@@ -75,8 +75,8 @@ local function load_records()
     return records_cache, records_by_version_cache
   end
 
-  -- mise's http functions pause the plugin while they run, which Lua 5.1
-  -- can't do inside pcall, so only the decoding is guarded.
+  -- mise's http functions can't run inside pcall in Lua 5.1, so only the
+  -- decoding is wrapped.
   local response = http.get({ url = xcode.releases_url })
   local ok, releases = false, nil
   if response ~= nil and response.status_code == 200 then
@@ -131,12 +131,13 @@ function xcode.record_for_version(version, search_path, install_dir)
   return records[1]
 end
 
--- Pre-release labels as people write them, and as the tags name them. GM
--- seeds were tagged "-seed" before they were "-gm-seed".
+-- Pre-release labels as people write them, and the labels the tags use. GM
+-- seeds were tagged "-seed" before "-gm-seed".
 local labels = { beta = "beta", rc = "rc", ["gm-seed"] = "gm-seed", seed = "gm-seed" }
 
--- The tag version a spelling names: "27.2-rc.1" is "27.2.0-rc", and
--- "11.5.0-seed" is "11.5.0-gm-seed". Returns nil for anything else.
+-- Returns the tagged version a written version means, such as "27.2.0-rc"
+-- for "27.2-rc.1", or "11.5.0-gm-seed" for "11.5.0-seed". Returns nil if it
+-- isn't one.
 local function tag_version(written)
   local number, label, count = written:match("^(%d+[%.%d]*)%-([%a%-]+)%.?(%d*)$")
   if number == nil then
@@ -172,10 +173,10 @@ end
 -- Pre-release names as Apple writes them, such as "27.2 Release Candidate 2".
 local apple_labels = { beta = "beta", ["release candidate"] = "rc", rc = "rc", ["gm seed"] = "gm-seed" }
 
--- The version in an .xcode-version file, which xcodes and fastlane read. It
--- is exact, as xcodes reads it: "26" is 26.0.0. Besides their "14.0b6", it
--- may be written as Apple does, "14.0 Beta 6", or as the plugin's versions
--- are. Returns nil for anything else.
+-- Reads the version in an .xcode-version file, which xcodes and fastlane use.
+-- The version is exact, as in xcodes: "26" means 26.0.0. It can be written as
+-- xcodes does ("14.0b6"), as Apple does ("14.0 Beta 6"), or as the tags are.
+-- Returns nil if it isn't a version.
 function xcode.version_file_version(content)
   local text = util.trim(tostring(content or ""):match("^%s*([^\r\n]*)")):gsub("^[Xx]code%s+", "")
 
@@ -196,8 +197,8 @@ function xcode.version_file_version(content)
   return tag_version(text)
 end
 
--- mise matches prefixes such as "27" and resolves "latest" itself, so a
--- version reaches the plugin either as tagged or spelled another way.
+-- mise resolves "latest" and prefixes such as "27" itself, so the plugin only
+-- gets full versions, written as tagged or another way.
 function xcode.resolve_version(written)
   local version = tag_version(written)
   if version ~= nil and #records_for_version(version) > 0 then
