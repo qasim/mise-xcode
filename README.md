@@ -46,7 +46,14 @@ This resolves to the latest stable Xcode version known by the plugin.
 xcode = '16.0.0'
 ```
 
-Pre-releases are written as their tags in [qasim/Xcode](https://github.com/qasim/Xcode) are, such as `27.3.0-beta.2`, `27.2.0-rc` or `11.5.0-gm-seed`. Other spellings of the same version work too: `27.2-rc.1` is `27.2.0-rc`, and `11.5.0-seed` is `11.5.0-gm-seed`.
+### Selecting a pre-release of Xcode
+
+```toml
+[tools]
+xcode = '27.3.0-beta.2'
+```
+
+Run `mise ls-remote --prerelease xcode` to see every pre-release.
 
 ### Selecting the latest stable version of a major Xcode
 
