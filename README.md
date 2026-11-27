@@ -90,7 +90,7 @@ xcode = '26.2.0'
 
 The first download may ask you to sign in to your Apple ID, so run it in a terminal. Without a terminal, such as in CI or from an agent, set `XCODES_USERNAME` and `XCODES_PASSWORD`, or sign in once from a terminal first; xcodes remembers the session. If you have a session from `fastlane spaceauth`, set it as `FASTLANE_SESSION`, and xcodes signs in with it.
 
-After installing, and whenever it selects an Xcode that has not been set up yet, the plugin accepts the license and installs the packages Xcode would otherwise ask for on first launch, without opening Xcode. This asks for your administrator password, so it also needs a terminal the first time.
+An Xcode can't be used from the command line until it's set up: its license accepted and its first-launch packages installed, which Xcode does when you first open it. So after installing, and whenever it selects an Xcode that isn't set up yet, the plugin does the same without opening Xcode. It accepts the license, installs those packages, and turns on developer mode so debugging doesn't ask for your password. Like Xcode, it needs your administrator password for this, so the first time, run it in a terminal. To skip it, set `install = false`.
 
 These options change what the plugin installs:
 
