@@ -8,6 +8,8 @@ A mise plugin, written in Lua, that selects Xcode versions and installs missing 
 
 Before calling a change done, run `mise run test` and `mise run lint`, and both must pass.
 
+mise's `http` functions pause the plugin while a request runs, and Lua 5.1 can't pause inside `pcall`. Call them outside `pcall`, and only wrap what comes after, such as decoding. The fake Mac behaves the same way, so tests catch it.
+
 ## Tests
 
 Tests prove what the plugin does for the people using it, so they keep passing when the code is reorganized and fail when its behavior breaks.

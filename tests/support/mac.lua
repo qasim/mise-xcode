@@ -392,7 +392,12 @@ function World:simple(argv, mode, cwd)
     self:remove(argv[2])
     return "", 0, cwd
   elseif program == "ln" then
-    self.paths[argv[4]] = { target = argv[3] }
+    -- Given a folder that exists, ln puts the link inside it.
+    local link = argv[4]
+    if self:exists(link) and type(self.paths[link]) ~= "table" then
+      link = link .. "/" .. argv[3]:match("[^/]+$")
+    end
+    self.paths[link] = { target = argv[3] }
     self:record("$ ln -s " .. argv[3] .. " " .. argv[4])
     return "", 0, cwd
   elseif program == "mv" then

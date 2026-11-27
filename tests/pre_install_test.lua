@@ -142,6 +142,45 @@ test("refuses a download changed after Apple signed it", function()
   check.equal(world:exists(installed), false, "Nothing should be installed")
 end)
 
+test("reuses an archive an earlier attempt downloaded", function()
+  local world = mac.new({ releases = { "27.2.0+27B52" }, xcodes = { saved = { xcode_27_2() } } })
+  world.paths[cache] = "dir"
+  world.archives[cache .. "/Xcode_27.2.xip"] = { build = "27B52" }
+
+  world:hook("PreInstall", { version = "27.2.0" })
+
+  check.lines(world.transcript, concat({ "> (1/3) Xcode 27.2.0 (27B52) is already downloaded" }, unpack_and_set_up))
+end)
+
+test("stops before downloading when it can't write to the install folder", function()
+  local world = mac.new({
+    releases = { "27.2.0+27B52" },
+    xcodes = { saved = { xcode_27_2() } },
+    read_only = { "/Applications" },
+  })
+
+  check.fails(
+    function()
+      world:hook("PreInstall", { version = "27.2.0" })
+    end,
+    "Cannot install Xcode 27.2.0 (27B52): you cannot write to /Applications.\nSet the install_dir option to a folder you can write to."
+  )
+  check.lines(world.transcript, {})
+end)
+
+test("stops before downloading when something is already where Xcode would go", function()
+  local world = mac.new({
+    releases = { "27.2.0+27B52" },
+    xcodes = { saved = { xcode_27_2() } },
+    paths = { [installed] = "dir" },
+  })
+
+  check.fails(function()
+    world:hook("PreInstall", { version = "27.2.0" })
+  end, "Cannot install Xcode 27.2.0 (27B52): " .. installed .. " already exists.\nMove it, then try again.")
+  check.lines(world.transcript, {})
+end)
+
 test("explains how to sign in when xcodes needs it and no one can answer", function()
   local world = mac.new({ releases = { "27.2.0+27B52" }, xcodes = { saved = { xcode_27_2() }, signed_in = false } })
 
