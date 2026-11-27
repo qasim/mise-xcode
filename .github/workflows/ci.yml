@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: macos-latest
+    steps:
+    - uses: actions/checkout@v7
+
+    - uses: jdx/mise-action@v5
+
+    - name: Lint
+      run: mise run lint
+
+    - name: Test
+      run: mise run test
+
+    # The tests use a fake Mac. This selects the Xcode on GitHub's Mac, which
+    # is at /Applications/Xcode.app, with the plugin and real mise, and runs it.
+    - name: Select the runner's Xcode
+      run: |
+        mise plugins link xcode "$PWD"
+        app=${XCODE_APP:-/Applications/Xcode.app}
+        version=$(defaults read "$app/Contents/Info" CFBundleShortVersionString)
+        mise link "xcode@$version" "$app"
+        test "$(mise exec "xcode@$version" -- printenv DEVELOPER_DIR)" = "$app"
+        mise exec "xcode@$version" -- xcodebuild -version | grep -F "Xcode $version"

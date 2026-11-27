@@ -1,58 +1,39 @@
-local cmd = require("cmd")
+local command = require("command")
+local system = require("system")
 local http = require("http")
 local json = require("json")
+local util = require("util")
+
+local trim, split_lines = util.trim, util.split_lines
 
 local xcode = {}
 
-xcode.github_repo = "https://github.com/qasim/Xcode"
-xcode.github_tags_url = xcode.github_repo .. ".git"
-xcode.github_api_repo_url = "https://api.github.com/repos/qasim/Xcode"
+-- Every Xcode release, newest first, with its build, date and download URL.
+xcode.releases_url = "https://raw.githubusercontent.com/qasim/Xcode/main/releases.json"
 
-local records_cache = nil
-local records_by_version_cache = nil
+local releases_cache = nil
+local releases_by_version = nil
 
-local function trim(value)
-  return tostring(value or ""):gsub("^%s+", ""):gsub("%s+$", "")
-end
-
-local function shell_quote(value)
-  return "'" .. tostring(value):gsub("'", "'\\''") .. "'"
-end
-
-local function command_succeeds(command)
-  return pcall(function()
-    cmd.exec(command, { timeout = 10000 })
-  end)
+local function test(flag, path)
+  return command.succeeds({ "test", flag, path }, { timeout = 10 })
 end
 
 local function path_exists(path)
-  return command_succeeds("test -e " .. shell_quote(path)) or command_succeeds("test -L " .. shell_quote(path))
-end
-
-local function path_is_directory(path)
-  return command_succeeds("test -d " .. shell_quote(path))
+  return test("-e", path) or test("-L", path)
 end
 
 local function path_is_symlink(path)
-  return command_succeeds("test -L " .. shell_quote(path))
+  return test("-L", path)
 end
 
 local function symlink_target(path)
   local ok, target = pcall(function()
-    return cmd.exec("readlink " .. shell_quote(path), { timeout = 10000 })
+    return command.output({ "readlink", path }, { timeout = 10 })
   end)
   if ok then
     return trim(target)
   end
   return nil
-end
-
-local function split_lines(value)
-  local lines = {}
-  for line in tostring(value or ""):gmatch("[^\r\n]+") do
-    table.insert(lines, line)
-  end
-  return lines
 end
 
 local function path_is_within(path, parent)
@@ -68,7 +49,7 @@ end
 
 local function selected_xcode_bundle_path(search_path)
   local ok, output = pcall(function()
-    return cmd.exec("/usr/bin/xcode-select -p", { timeout = 10000 })
+    return command.output({ system.xcode_select, "-p" }, { timeout = 10 })
   end)
   if not ok then
     return nil
@@ -83,212 +64,177 @@ local function selected_xcode_bundle_path(search_path)
   return bundle_path
 end
 
-local function parse_version(version)
-  local base, prerelease = version:match("^([%d%.]+)%-?(.*)$")
-  local parts = {}
-  for part in tostring(base or ""):gmatch("%d+") do
-    table.insert(parts, tonumber(part))
+-- Every release, newest first.
+local function releases()
+  if releases_cache ~= nil then
+    return releases_cache
   end
-  return parts, prerelease ~= "" and prerelease or nil
+
+  -- mise's http functions can't run inside pcall in Lua 5.1, so only the
+  -- decoding is wrapped.
+  local response = http.get({ url = xcode.releases_url })
+  local ok, list = false, nil
+  if response ~= nil and response.status_code == 200 then
+    ok, list = pcall(json.decode, response.body)
+  end
+  if not ok or type(list) ~= "table" then
+    error("Couldn't read the list of Xcode releases.", 0)
+  end
+
+  -- Each version belongs to one build.
+  releases_by_version = {}
+  for _, release in ipairs(list) do
+    releases_by_version[release.version] = release
+  end
+  releases_cache = list
+  return releases_cache
 end
 
-local function compare_versions(left, right)
-  local left_parts, left_prerelease = parse_version(left)
-  local right_parts, right_prerelease = parse_version(right)
-
-  for i = 1, math.max(#left_parts, #right_parts) do
-    local left_part = left_parts[i] or 0
-    local right_part = right_parts[i] or 0
-    if left_part ~= right_part then
-      return left_part - right_part
-    end
-  end
-
-  if left_prerelease == nil and right_prerelease ~= nil then
-    return 1
-  end
-  if left_prerelease ~= nil and right_prerelease == nil then
-    return -1
-  end
-  if left_prerelease == nil and right_prerelease == nil then
-    return 0
-  end
-  if left_prerelease == right_prerelease then
-    return 0
-  end
-  return left_prerelease > right_prerelease and 1 or -1
-end
-
-local function compare_natural(left, right)
-  local left_tokens = {}
-  local right_tokens = {}
-
-  for token in tostring(left):gmatch("%d+%D*") do
-    local number, suffix = token:match("^(%d+)(%D*)$")
-    table.insert(left_tokens, { number = tonumber(number), suffix = suffix })
-  end
-  for token in tostring(right):gmatch("%d+%D*") do
-    local number, suffix = token:match("^(%d+)(%D*)$")
-    table.insert(right_tokens, { number = tonumber(number), suffix = suffix })
-  end
-
-  for i = 1, math.max(#left_tokens, #right_tokens) do
-    local left_token = left_tokens[i]
-    local right_token = right_tokens[i]
-    if left_token == nil then
-      return -1
-    end
-    if right_token == nil then
-      return 1
-    end
-    if left_token.number ~= right_token.number then
-      return left_token.number - right_token.number
-    end
-    if left_token.suffix ~= right_token.suffix then
-      return left_token.suffix > right_token.suffix and 1 or -1
-    end
-  end
-
-  return 0
-end
-
-local function load_tag_records()
-  if records_cache ~= nil then
-    return records_cache, records_by_version_cache
-  end
-
-  local output = cmd.exec("git ls-remote --tags --refs " .. shell_quote(xcode.github_tags_url), {
-    timeout = 30000,
-  })
-  local by_version = {}
-
-  for _, line in ipairs(split_lines(output)) do
-    local tag_sha = line:match("^([^%s]+)%s+")
-    local tag = line:match("refs/tags/(.+)$")
-    if tag ~= nil then
-      local version, build = tag:match("^(.+)%+(.+)$")
-      if version ~= nil and build ~= nil then
-        by_version[version] = by_version[version] or {}
-        table.insert(by_version[version], {
-          version = version,
-          build = build,
-          tag = tag,
-          tag_sha = tag_sha,
-        })
-      end
-    end
-  end
-
-  local records = {}
-  for _, version_records in pairs(by_version) do
-    table.sort(version_records, function(left, right)
-      return compare_natural(left.build, right.build) > 0
-    end)
-    table.insert(records, version_records[1])
-  end
-  table.sort(records, function(left, right)
-    return compare_versions(left.version, right.version) > 0
-  end)
-
-  records_cache = records
-  records_by_version_cache = by_version
-  return records_cache, records_by_version_cache
-end
-
-local function tag_records()
-  local records = load_tag_records()
-  return records
-end
-
-local function records_for_version(version)
-  local _, by_version = load_tag_records()
-  return by_version[version] or {}
+local function release_for(version)
+  releases()
+  return releases_by_version[version]
 end
 
 function xcode.available_versions()
   local result = {}
-  for _, record in ipairs(tag_records()) do
+  for _, release in ipairs(releases()) do
     table.insert(result, {
-      version = record.version,
-      note = "build " .. record.build,
+      version = release.version,
+      note = "build " .. release.build,
+      -- For mise's minimum_release_age and --before.
+      created_at = release.date and (release.date .. "T00:00:00Z") or nil,
     })
   end
   return result
 end
 
-function xcode.record_for_version(version, search_path)
-  local records = records_for_version(version)
-  for _, record in ipairs(records) do
-    if xcode.find_developer_dir(record.build, search_path) ~= nil then
-      return record
-    end
-  end
+-- Pre-release labels as people write them, and the labels the tags use. GM
+-- seeds were tagged "-seed" before "-gm-seed".
+local labels = { beta = "beta", rc = "rc", ["gm-seed"] = "gm-seed", seed = "gm-seed" }
 
-  return records[1]
+-- Returns the tagged version a written version means, such as "27.2.0-rc"
+-- for "27.2-rc.1", or "11.5.0-gm-seed" for "11.5.0-seed". Returns nil if it
+-- isn't one.
+local function tag_version(written)
+  local number, label, count = written:match("^(%d+[%.%d]*)%-([%a%-]+)%.?(%d*)$")
+  if number == nil then
+    number, label, count = written:match("^(%d+[%.%d]*)$"), nil, ""
+  end
+  if number == nil or number:find("..", 1, true) or number:sub(-1) == "." then
+    return nil
+  end
+  local parts = {}
+  for part in number:gmatch("%d+") do
+    table.insert(parts, part)
+  end
+  if #parts > 3 then
+    return nil
+  end
+  while #parts < 3 do
+    table.insert(parts, "0")
+  end
+  local version = table.concat(parts, ".")
+  if label == nil then
+    return version
+  end
+  if labels[label] == nil or count == "0" then
+    return nil
+  end
+  version = version .. "-" .. labels[label]
+  if count ~= "" and count ~= "1" then
+    version = version .. "." .. count
+  end
+  return version
 end
 
-function xcode.latest_stable_version()
-  for _, record in ipairs(tag_records()) do
-    if record.version:find("-", 1, true) == nil then
-      return record.version
-    end
+-- Pre-release names as Apple writes them, such as "27.2 Release Candidate 2".
+local apple_labels = { beta = "beta", ["release candidate"] = "rc", rc = "rc", ["gm seed"] = "gm-seed" }
+
+-- Reads the version in an .xcode-version file, which xcodes and fastlane use.
+-- The version is exact, as in xcodes: "26" means 26.0.0. It can be written as
+-- xcodes does ("14.0b6"), as Apple does ("14.0 Beta 6"), or as the tags are.
+-- Returns nil if it isn't a version.
+function xcode.version_file_version(content)
+  local text = util.trim(tostring(content or ""):match("^%s*([^\r\n]*)")):gsub("^[Xx]code%s+", "")
+
+  local number, count = text:match("^(%d+[%.%d]*)[bB](%d*)$")
+  if number ~= nil then
+    text = number .. "-beta" .. (count ~= "" and ("." .. count) or "")
   end
-  return nil
+
+  local apple_number, name, apple_count = text:match("^(%d+[%.%d]*)%s+(%a[%a ]-)%s*(%d*)$")
+  if apple_number ~= nil then
+    local label = apple_labels[name:lower()]
+    if label == nil then
+      return nil
+    end
+    text = apple_number .. "-" .. label .. (apple_count ~= "" and ("." .. apple_count) or "")
+  end
+
+  return tag_version(text)
 end
 
-function xcode.resolve_version(version)
-  if version == "latest" then
-    return xcode.latest_stable_version()
+-- mise resolves "latest" and prefixes such as "27" itself, so the plugin only
+-- gets full versions, written as tagged or another way.
+-- Returns the release a written version means.
+function xcode.release_for_version(written)
+  local version = tag_version(written)
+  local release = version and release_for(version)
+  if release == nil then
+    error("No Xcode release matches version " .. written .. ".", 0)
   end
-
-  for _, record in ipairs(tag_records()) do
-    if record.version == version then
-      return record.version
-    end
-    if record.version:match("^" .. version:gsub("%.", "%%.") .. "%.") then
-      return record.version
-    end
-  end
-
-  return nil
-end
-
-function xcode.build_for_version(version, search_path)
-  local resolved_version = xcode.resolve_version(version)
-  if resolved_version == nil then
-    error("No Xcode version exists that corresponds to " .. version .. ".")
-  end
-
-  local record = xcode.record_for_version(resolved_version, search_path)
-  if record == nil then
-    error("No Xcode version exists that corresponds to " .. version .. ".")
-  end
-
-  return record.build, record.version, record
+  return release
 end
 
 local function xcode_bundle_paths(search_path)
   local query = "kMDItemCFBundleIdentifier='com.apple.dt.Xcode'"
-  local output =
-    cmd.exec("mdfind -onlyin " .. shell_quote(search_path or "/") .. " " .. shell_quote(query), { timeout = 30000 })
+  local output = command.output({ system.mdfind, "-onlyin", search_path or "/", query }, { timeout = 30 })
   return split_lines(output)
 end
 
 local function product_build_version(bundle_path)
   local plist_path = bundle_path .. "/Contents/version.plist"
-  local output = cmd.exec(
-    "/usr/libexec/PlistBuddy -c " .. shell_quote("print 'ProductBuildVersion'") .. " " .. shell_quote(plist_path),
-    { timeout = 10000 }
+  local output = command.output(
+    { "/usr/libexec/PlistBuddy", "-c", "Print :ProductBuildVersion", plist_path },
+    { timeout = 10 }
   )
   return trim(output)
 end
 
-function xcode.find_developer_dir(build, search_path)
+-- Lists apps directly inside a folder. Unlike Spotlight, this also sees
+-- Xcodes that were installed moments ago and are not indexed yet.
+local function direct_bundle_paths(directory, search_path)
+  if directory == nil or not path_is_within(directory, search_path or "/") then
+    return {}
+  end
+  local ok, output = pcall(function()
+    return command.output({ "ls", "-1", directory }, { timeout = 10 })
+  end)
+  if not ok then
+    return {}
+  end
+  local paths = {}
+  for _, name in ipairs(split_lines(output)) do
+    if name:match("^Xcode.*%.app$") then
+      table.insert(paths, directory .. "/" .. name)
+    end
+  end
+  return paths
+end
+
+function xcode.find_developer_dir(build, search_path, install_dir)
   local selected_bundle_path = selected_xcode_bundle_path(search_path or "/")
   if selected_bundle_path ~= nil then
     local ok, selected_build = pcall(product_build_version, selected_bundle_path)
     if ok and selected_build == build then
       return selected_bundle_path .. "/Contents/Developer"
+    end
+  end
+
+  for _, bundle_path in ipairs(direct_bundle_paths(install_dir or system.applications, search_path)) do
+    local ok, bundle_build = pcall(product_build_version, bundle_path)
+    if ok and bundle_build == build then
+      return bundle_path .. "/Contents/Developer"
     end
   end
 
@@ -301,108 +247,69 @@ function xcode.find_developer_dir(build, search_path)
   return nil
 end
 
-function xcode.installation_hint(record)
-  if record == nil or record.tag_sha == nil then
-    return nil
-  end
-  if record.installation_url ~= nil then
-    return record.installation_url
-  end
-
-  local resp, err = http.get({
-    url = xcode.github_api_repo_url .. "/git/tags/" .. record.tag_sha,
-  })
-  if err ~= nil or resp == nil or resp.status_code ~= 200 then
-    return nil
-  end
-
-  local ok, body = pcall(function()
-    return json.decode(resp.body)
-  end)
-  if not ok or body == nil then
-    return nil
-  end
-
-  local message = body.message
-  local url = tostring(message or ""):match("https://%S+")
-  record.installation_url = url
-  return record.installation_url
-end
-
-function xcode.require_developer_dir(version, build, search_path, record)
-  local developer_dir = xcode.find_developer_dir(build, search_path)
+-- suggest_xcodes says whether adding xcodes would let the plugin download the
+-- missing Xcode, which is not the case when the install option is off.
+function xcode.require_developer_dir(release, search_path, install_dir, suggest_xcodes)
+  local version, build = release.version, release.build
+  local developer_dir = xcode.find_developer_dir(build, search_path, install_dir)
   if developer_dir == nil then
-    local message = "No Xcode " .. version .. " installation found within search path."
-    local installation_hint = xcode.installation_hint(record)
-    if installation_hint ~= nil and installation_hint ~= "" then
-      message = message .. "\nInstall it from: " .. installation_hint
+    local message = "No Xcode " .. version .. " (" .. build .. ") found in the search path."
+    local download_url = release.url
+    local has_url = download_url ~= nil and download_url ~= ""
+    if has_url and suggest_xcodes then
+      message = message
+        .. "\nDownload it from "
+        .. download_url
+        .. ", or add xcodes to [tools] so mise can download it before installation."
+    elseif has_url then
+      message = message .. "\nDownload it from " .. download_url .. "."
+    elseif suggest_xcodes then
+      message = message .. "\nAdd xcodes to [tools] so mise can download it."
     end
-    error(message)
+    error(message, 0)
   end
   return developer_dir
 end
 
+-- Links mise's install folder for a version to the Xcode it selects.
 function xcode.write_developer_dir_install(path, developer_dir)
   local parent = path:match("^(.*)/[^/]+$")
   if parent ~= nil then
-    cmd.exec("mkdir -p " .. shell_quote(parent), { timeout = 10000 })
+    command.output({ "mkdir", "-p", parent }, { timeout = 10 })
   end
 
+  -- mise makes the install folder before PostInstall, so it is replaced.
   if path_is_symlink(path) then
-    cmd.exec("rm -f " .. shell_quote(path), { timeout = 10000 })
-  elseif path_is_directory(path) then
-    cmd.exec("rmdir " .. shell_quote(path), { timeout = 10000 })
+    command.output({ "rm", "-f", path }, { timeout = 10 })
   elseif path_exists(path) then
-    cmd.exec("rm -f " .. shell_quote(path), { timeout = 10000 })
+    command.output({ "rmdir", path }, { timeout = 10 })
   end
 
-  cmd.exec("ln -s " .. shell_quote(developer_dir) .. " " .. shell_quote(path), { timeout = 10000 })
+  command.output({ "ln", "-s", developer_dir, path }, { timeout = 10 })
 end
 
-function xcode.read_build_file(path)
-  local file = require("file")
-  return trim(file.read(path .. "/BUILD"))
-end
-
-function xcode.developer_dir_for_install(path, search_path)
+-- The Xcode a version's install folder links to. Until PostInstall has linked
+-- it, DEVELOPER_DIR points at nothing, so Apple's tools fail instead of using
+-- another Xcode.
+function xcode.developer_dir_for_install(path)
   if path_is_symlink(path) then
     return symlink_target(path) or path
   end
-
-  -- Migrate installs created before the install path became a symlink. The
-  -- broken-link fallback deliberately keeps DEVELOPER_DIR version-specific,
-  -- so a removed Xcode cannot silently fall back to another installation.
-  local link_path = path .. "/Developer"
-  if path_exists(link_path) then
-    return symlink_target(link_path) or link_path
-  end
-
-  local build_ok, build = pcall(xcode.read_build_file, path)
-  local developer_dir = nil
-  if build_ok and build ~= "" then
-    local find_ok, result = pcall(xcode.find_developer_dir, build, search_path)
-    if find_ok then
-      developer_dir = result
-    end
-  end
-
-  local target = developer_dir or (path .. "/Xcode-not-installed")
-  command_succeeds("ln -s " .. shell_quote(target) .. " " .. shell_quote(link_path))
-
-  if path_exists(link_path) then
-    return symlink_target(link_path) or link_path
-  end
-  return developer_dir or link_path
+  return path .. "/Xcode-not-installed"
 end
 
-function xcode.context_field(ctx, key, fallback)
-  local ok, value = pcall(function()
-    return ctx[key]
-  end)
-  if ok and value ~= nil then
-    return value
+-- Where new Xcodes are installed: install_dir, else a narrowed search_path,
+-- else /Applications. It is kept inside the search path so the result is found.
+function xcode.install_dir(options)
+  local directory = options.install_dir
+  if directory == nil or directory == "" then
+    local search_path = tostring(options.search_path or "/"):gsub("/+$", "")
+    directory = search_path ~= "" and search_path or system.applications
   end
-  return fallback
+  if directory:sub(1, 2) == "~/" then
+    directory = (os.getenv("HOME") or "") .. directory:sub(2)
+  end
+  return directory
 end
 
 return xcode

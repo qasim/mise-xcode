@@ -1,0 +1,14 @@
+[tools]
+# mise runs plugins on Lua 5.1, so the tests do too.
+lua = "5.1.5"
+stylua = "latest"
+
+[tasks.test]
+description = "Run the tests"
+run = "lua tests/run.lua"
+
+[tasks.lint]
+run = "stylua --check metadata.lua hooks lib tests"
+
+[tasks.fmt]
+run = "stylua metadata.lua hooks lib tests"
