@@ -122,8 +122,10 @@ World.__index = World
 --             apple     releases in Apple's list: { name, build }
 --             signed_in whether xcodes has a session (default true)
 --             broken    whether `xcodes version` fails, as an unset mise shim does
---             Each release may set `file` (its archive's name) and
---             `downloads` (the build the archive really holds).
+--             Each release may set `file` (its archive's name),
+--             `downloads` (the build the archive really holds), `team`
+--             (who signed it) and `signature = "broken"` (changed after it
+--             was signed).
 --   terminal    whether someone can answer prompts (default false)
 --   sudo_cached whether sudo would run without asking (default true)
 --   stream      whether mise has cmd.stream (default true)
@@ -412,7 +414,15 @@ function World:simple(argv, mode, cwd)
     return self:expand(argv[3], cwd, "archiveutil extractXcodeAEA")
   elseif program == "/usr/bin/codesign" then
     local app = self:app_for(argv[#argv])
-    return "Identifier=" .. app.identifier .. "\nTeamIdentifier=" .. app.team .. "\n", 0, cwd
+    if argv[2] == "--verify" then
+      -- Checks the signature against a requirement such as
+      -- '=anchor apple and identifier "com.apple.dt.Xcode"'.
+      local requirement = argv[#argv - 1]
+      local identifier = requirement:match('identifier "([^"]+)"')
+      local apple = app.team == "59GAB85EFG" or not requirement:find("anchor apple", 1, true)
+      local valid = app.signature == "valid" and apple and identifier == app.identifier
+      return "", valid and 0 or 3, cwd
+    end
   elseif program == "/usr/sbin/spctl" then
     local app = self:app_for(argv[#argv])
     return "", app.gatekeeper and 0 or 3, cwd
@@ -442,6 +452,7 @@ function World:expand(archive, cwd, tool)
     gatekeeper = contents.gatekeeper ~= false,
     indexed = false,
     identifier = "com.apple.dt.Xcode",
+    signature = contents.signature or "valid",
   }
   return "", 0, cwd
 end
@@ -538,7 +549,8 @@ function World:xcodes_command(argv, mode, cwd)
       return "", 1, cwd
     end
     local archive = directory .. "/" .. (release.file or ("Xcode-" .. name:gsub(" ", "_") .. ".xip"))
-    self.archives[archive] = { build = release.downloads or release.build, team = release.team }
+    self.archives[archive] =
+      { build = release.downloads or release.build, team = release.team, signature = release.signature }
     return "", 0, cwd
   end
   error("The fake Mac does not know this xcodes command: " .. line(argv), 0)

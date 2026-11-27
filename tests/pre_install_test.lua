@@ -132,6 +132,15 @@ test("refuses a download that is not signed by Apple", function()
   check.equal(world:exists(installed), false, "Nothing should be installed")
 end)
 
+test("refuses a download changed after Apple signed it", function()
+  local world = mac.new({ tags = { "27.2.0+27B52" }, xcodes = { saved = { xcode_27_2({ signature = "broken" }) } } })
+
+  check.fails(function()
+    world:hook("PreInstall", { version = "27.2.0" })
+  end, "Did not install Xcode 27.2.0 (27B52): it is not signed by Apple.")
+  check.equal(world:exists(installed), false, "Nothing should be installed")
+end)
+
 test("explains how to sign in when xcodes needs it and no one can answer", function()
   local world = mac.new({ tags = { "27.2.0+27B52" }, xcodes = { saved = { xcode_27_2() }, signed_in = false } })
 

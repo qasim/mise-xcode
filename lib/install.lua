@@ -14,8 +14,8 @@ local trim, shell_quote, split_lines = util.trim, util.shell_quote, util.split_l
 
 local install = {}
 
--- Apple's Developer ID team that signs Xcode.
-local apple_team_identifier = "59GAB85EFG"
+-- What Xcode's signature must say: Apple signed it, and it is Xcode.
+local xcode_requirement = '=anchor apple and identifier "com.apple.dt.Xcode"'
 
 -- Ends the output of commands whose exit code the plugin reads from it, as
 -- "<marker><code>". mise's own command runner reports only success or failure.
@@ -390,8 +390,13 @@ local function verify_bundle(bundle_path, version, build)
     error(refused .. "the download is build " .. tostring(actual_build) .. ".", 0)
   end
 
-  local ok, details = pcall(cmd.exec, system.codesign .. " -dv --verbose=2 " .. shell_quote(bundle_path) .. " 2>&1")
-  if not ok or not tostring(details):find("TeamIdentifier=" .. apple_team_identifier, 1, true) then
+  -- Unlike reading who signed it, verifying also fails for an app changed after
+  -- it was signed. It takes about 15 seconds.
+  local signed = succeeds(
+    system.codesign .. " --verify --strict -R " .. shell_quote(xcode_requirement) .. " " .. shell_quote(bundle_path),
+    {}
+  )
+  if not signed then
     error(refused .. "it is not signed by Apple.", 0)
   end
 
