@@ -81,7 +81,7 @@ local function load_records()
     ok, releases = pcall(json.decode, response.body)
   end
   if not ok or type(releases) ~= "table" then
-    error("Could not read the list of Xcode releases from " .. xcode.releases_url .. ".", 0)
+    error("Couldn't read the list of Xcode releases.", 0)
   end
 
   -- Each version belongs to one build.
@@ -296,7 +296,7 @@ function xcode.require_developer_dir(version, build, search_path, record, instal
       message = message
         .. "\nDownload it from "
         .. download_url
-        .. ", or add xcodes to [tools] so mise can download it."
+        .. ", or add xcodes to [tools] so mise can download it before installation."
     elseif has_url then
       message = message .. "\nDownload it from " .. download_url .. "."
     elseif suggest_xcodes then

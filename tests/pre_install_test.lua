@@ -149,8 +149,17 @@ test("explains how to sign in when xcodes needs it and no one can answer", funct
     function()
       world:hook("PreInstall", { version = "27.2.0" })
     end,
-    "Failed to download Xcode 27.2.0 (27B52) with xcodes.\nIf xcodes needs an Apple ID sign-in, run `mise install` in a terminal, or set XCODES_USERNAME and XCODES_PASSWORD."
+    "Couldn't download Xcode 27.2.0. xcodes needs to sign in to your Apple ID, and it can't ask you for it here.\nTo sign in, either:\n- run `mise install` in a terminal, or\n- set XCODES_USERNAME and XCODES_PASSWORD, or\n- set FASTLANE_SESSION to a session from `fastlane spaceauth`."
   )
+end)
+
+test("says only that the download failed when it wasn't for a sign-in", function()
+  local world = mac.new({ releases = { "27.2.0+27B52" }, xcodes = { saved = { xcode_27_2({ fails = true }) } } })
+
+  local message = check.fails(function()
+    world:hook("PreInstall", { version = "27.2.0" })
+  end, "Failed to download Xcode 27.2.0 (27B52) with xcodes.")
+  check.equal(message, "Failed to download Xcode 27.2.0 (27B52) with xcodes.")
 end)
 
 test("lets the user sign in when xcodes needs it in a terminal", function()
@@ -188,7 +197,7 @@ test("without xcodes, says where to download a missing Xcode", function()
     function()
       world:hook("PreInstall", { version = "27.2.0" })
     end,
-    "No Xcode 27.2.0 (27B52) found in the search path.\nDownload it from https://download.developer.apple.com/Developer_Tools/Xcode_27.2/Xcode_27.2.xip, or add xcodes to [tools] so mise can download it."
+    "No Xcode 27.2.0 (27B52) found in the search path.\nDownload it from https://download.developer.apple.com/Developer_Tools/Xcode_27.2/Xcode_27.2.xip, or add xcodes to [tools] so mise can download it before installation."
   )
   check.lines(world.transcript, {})
 end)

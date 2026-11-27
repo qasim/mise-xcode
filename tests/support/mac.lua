@@ -130,8 +130,8 @@ World.__index = World
 --             broken    whether `xcodes version` fails, as an unset mise shim does
 --             Each release may set `file` (its archive's name),
 --             `downloads` (the build the archive really holds), `team`
---             (who signed it) and `signature = "broken"` (changed after it
---             was signed).
+--             (who signed it), `signature = "broken"` (changed after it
+--             was signed) and `fails = true` (its download fails).
 --   terminal    whether someone can answer prompts (default false)
 --   sudo_cached whether sudo would run without asking (default true)
 --   stream      whether mise has cmd.stream (default true)
@@ -579,7 +579,7 @@ function World:xcodes_command(argv, mode, cwd)
         release = candidate
       end
     end
-    if release == nil then
+    if release == nil or release.fails then
       return "", 1, cwd
     end
     local archive = directory .. "/" .. (release.file or ("Xcode-" .. name:gsub(" ", "_") .. ".xip"))

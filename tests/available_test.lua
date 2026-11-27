@@ -26,5 +26,5 @@ test("says where the list of releases could not be read from", function()
 
   check.fails(function()
     world:hook("Available")
-  end, "Could not read the list of Xcode releases from " .. mac.releases_url .. ".")
+  end, "Couldn't read the list of Xcode releases.")
 end)

@@ -210,25 +210,31 @@ local function download_with_xcodes(xcodes_path, version, build, directory, step
   -- no input so the user's terminal is left alone.
   local label = "Downloading Xcode " .. version
   local code = command.with_progress(download, label, this_step(steps), { pty = true })
-  local ok = code == 0
+  local wants_sign_in = code == command.wants_sign_in and not command.has_terminal()
   if code == command.wants_sign_in and command.has_terminal() then
     -- Signing in needs the terminal, so xcodes runs again attached to it.
     -- mise's progress display stays frozen while the terminal is handed over.
-    ok = command.with_progress(download, label, this_step(steps), { pty = true, terminal = true }) == 0
+    code = command.with_progress(download, label, this_step(steps), { pty = true, terminal = true })
   end
   if from_apple then
     -- xcodes keeps one list, which Apple's replaced, so it is set back to the
     -- one from xcodereleases.com, with builds.
     update_xcodes_list(xcodes_path)
   end
-  if not ok then
-    local message = "Failed to download Xcode " .. version .. " (" .. build .. ") with xcodes."
-    if not command.has_terminal() then
-      message = message
-        .. "\nIf xcodes needs an Apple ID sign-in, run `mise install` in a terminal,"
-        .. " or set XCODES_USERNAME and XCODES_PASSWORD."
-    end
-    error(message, 0)
+  if wants_sign_in then
+    error(
+      "Couldn't download Xcode "
+        .. version
+        .. ". xcodes needs to sign in to your Apple ID, and it can't ask you for it here."
+        .. "\nTo sign in, either:"
+        .. "\n- run `mise install` in a terminal, or"
+        .. "\n- set XCODES_USERNAME and XCODES_PASSWORD, or"
+        .. "\n- set FASTLANE_SESSION to a session from `fastlane spaceauth`.",
+      0
+    )
+  end
+  if code ~= 0 then
+    error("Failed to download Xcode " .. version .. " (" .. build .. ") with xcodes.", 0)
   end
 
   local archive = find_archive(directory)
