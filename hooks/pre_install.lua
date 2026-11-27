@@ -2,10 +2,11 @@ local install = require("install")
 local xcode = require("xcode")
 
 function PLUGIN:PreInstall(ctx)
-  local options = xcode.context_field(ctx, "options", {})
+  local options = ctx.options or {}
   local search_path = options.search_path or "/"
   local install_dir = xcode.install_dir(options)
-  local build, version, record = xcode.build_for_version(ctx.version, search_path, install_dir)
+  local release = xcode.release_for_version(ctx.version)
+  local version, build = release.version, release.build
   local automatic = install.option_enabled(options.install, true)
   local note = "Selected Xcode " .. version .. " (" .. build .. ")"
 
@@ -29,7 +30,7 @@ function PLUGIN:PreInstall(ctx)
     note = "Installed Xcode " .. version .. " (" .. build .. ")"
   end
 
-  developer_dir = xcode.require_developer_dir(version, build, search_path, record, install_dir, automatic)
+  developer_dir = xcode.require_developer_dir(release, search_path, install_dir, automatic)
   if automatic then
     install.prepare(developer_dir, options, version, steps, downloading)
   end

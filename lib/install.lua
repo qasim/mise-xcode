@@ -39,11 +39,11 @@ local function this_step(steps)
 end
 
 -- Tool options may arrive as booleans, strings, lists or newline-joined strings.
-function install.option_list(value)
+local function option_list(value)
   local result = {}
   if type(value) == "table" then
     for _, item in ipairs(value) do
-      for _, part in ipairs(install.option_list(item)) do
+      for _, part in ipairs(option_list(item)) do
         table.insert(result, part)
       end
     end
@@ -107,7 +107,7 @@ end
 
 -- xcodes names releases after Apple ("27.0 Beta 3"), not semver, so the
 -- release is looked up by its build number instead of translating versions.
-function install.xcodes_name_for_build(xcodes_path, build)
+local function xcodes_name_for_build(xcodes_path, build)
   local output = command.output({ xcodes_path, "list", "--no-color" }, { timeout = 120 })
   for _, line in ipairs(split_lines(output)) do
     local name, line_build = line:match("^(.-)%s+%(([%w]+)%)")
@@ -165,9 +165,9 @@ end
 
 local function download_with_xcodes(xcodes_path, version, build, directory, steps)
   -- The list xcodes keeps can be older than the release.
-  local name = install.xcodes_name_for_build(xcodes_path, build)
+  local name = xcodes_name_for_build(xcodes_path, build)
   if name == nil and update_xcodes_list(xcodes_path) then
-    name = install.xcodes_name_for_build(xcodes_path, build)
+    name = xcodes_name_for_build(xcodes_path, build)
   end
 
   -- A release xcodereleases.com does not list yet is downloaded from Apple's
@@ -565,7 +565,7 @@ local function component_status(developer_dir, component)
 end
 
 function install.extras_count(options)
-  return #install.option_list(options.platforms) + #install.option_list(options.components)
+  return #option_list(options.platforms) + #option_list(options.components)
 end
 
 -- xcodebuild keeps these apart: simulator platforms (iOS, watchOS, ...) use
@@ -593,7 +593,7 @@ local function download_with_xcodebuild(developer_dir, words, name, failed, step
 end
 
 local function download_extras(developer_dir, options, version, steps)
-  for _, entry in ipairs(install.option_list(options.platforms)) do
+  for _, entry in ipairs(option_list(options.platforms)) do
     -- "iOS" is the runtime that matches this Xcode; "iOS@26.0" is an exact
     -- older version, for testing on it.
     local known, platform, runtime_version = parse_platform(entry)
@@ -641,7 +641,7 @@ local function download_extras(developer_dir, options, version, steps)
     end
   end
 
-  for _, component in ipairs(install.option_list(options.components)) do
+  for _, component in ipairs(option_list(options.components)) do
     local name = components[component:lower()] or component
     local installed, component_build = component_status(developer_dir, component)
     local build_note = component_build and (" (" .. component_build .. ")") or ""
