@@ -3,7 +3,7 @@
 Xcode plugin for the [Mise](https://github.com/jdx/mise) version manager.
 
 > [!NOTE]
-> This plugin selects the Xcode your project uses by setting `DEVELOPER_DIR`. When that Xcode is missing and [xcodes](https://github.com/XcodesOrg/xcodes) is available, it downloads and sets it up too; see [Installing missing Xcodes](#installing-missing-xcodes).
+> This plugin selects the Xcode your project uses by setting `DEVELOPER_DIR`, and can install it with [xcodes](https://github.com/XcodesOrg/xcodes); see [Installing Xcode](#installing-xcode).
 
 ## Install
 
@@ -93,9 +93,9 @@ To use an Xcode the plugin doesn't find, link it with mise:
 mise link xcode@26.2.0 /Volumes/Tools/Xcode-26.2.app
 ```
 
-## Installing missing Xcodes
+## Installing Xcode
 
-When the Xcode you ask for isn't installed, the plugin downloads it with [xcodes](https://github.com/XcodesOrg/xcodes), so add xcodes to your tools:
+The plugin installs Xcode with [xcodes](https://github.com/XcodesOrg/xcodes). Add it to your tools:
 
 ```toml
 [tools]
@@ -103,37 +103,29 @@ xcodes = 'latest'
 xcode = '26.2.0'
 ```
 
-xcodes looks each release up in the list from [xcodereleases.com](https://xcodereleases.com/). A release that isn't there yet, such as a beta Apple published today, comes from Apple's own list instead, and may be the Universal Xcode rather than the Apple silicon one, which is larger but works the same.
+If that Xcode is already installed, the plugin uses it.
 
-The plugin then unpacks the download, checks that it's the build you asked for and that Apple signed it, and installs it as `Xcode-<version>.app`. Without xcodes, the plugin only selects Xcodes you have installed yourself.
+### Signing in
 
-### Signing in to your Apple ID
+xcodes asks for your Apple ID the first time, then remembers it. Where no one can type, such as in CI, sign in once from a terminal first, or set `XCODES_USERNAME` and `XCODES_PASSWORD`, or `FASTLANE_SESSION`.
 
-Downloading Xcode needs your Apple ID. Run `mise install` in a terminal, and xcodes asks you to sign in the first time, then remembers it. Where no one can type, such as in CI or from an agent, either:
+### Setting up
 
-- sign in once from a terminal first, or
-- set `XCODES_USERNAME` and `XCODES_PASSWORD`, or
-- set `FASTLANE_SESSION` to a session from `fastlane spaceauth`.
-
-### Setting up Xcode
-
-An Xcode can't be used from the command line until it's set up: its license accepted and its first-launch packages installed, which Xcode does when you first open it. So after installing, and whenever it selects an Xcode that isn't set up yet, the plugin does the same without opening Xcode. It accepts the license, installs those packages, and turns on developer mode so debugging doesn't ask for your password. Like Xcode, it needs your administrator password for this, so the first time, run it in a terminal.
+After installing, the plugin accepts the license and installs the packages Xcode asks for on first launch. This needs your administrator password.
 
 ### Options
-
-These options change what the plugin installs:
 
 ```toml
 [tools]
 xcode = { version = '26.2.0', platforms = ['iOS', 'watchOS'], components = ['metalToolchain'], install_dir = '~/Applications' }
 ```
 
-- `platforms`: simulator platforms to download with `xcodebuild -downloadPlatform`, such as `iOS` or `watchOS`. A plain name gets the simulator that matches the Xcode. Add an exact version, such as `iOS@26.0`, for an older simulator to test on.
-- `components`: extra components to download with `xcodebuild -downloadComponent`, such as `metalToolchain`.
-- `install_dir`: where new Xcodes are installed. Defaults to `search_path` if you set one, otherwise `/Applications`.
-- `install = false`: never download, set up or add to Xcode; only select it.
+- `platforms`: simulators to download, such as `iOS`, or `iOS@26.0` for an older one.
+- `components`: components to download, such as `metalToolchain`.
+- `install_dir`: where Xcode is installed. Defaults to `/Applications`, or `search_path` if you set one.
+- `install = false`: only select Xcodes that are already installed.
 
-mise treats an installed version as done, so platforms or components added later are downloaded only after `mise install --force xcode`. Ones already installed are skipped.
+Platforms and components added later need `mise install --force xcode`.
 
 ## Troubleshooting
 
@@ -141,7 +133,7 @@ mise treats an installed version as done, so platforms or components added later
 
 The plugin was not able to find a valid Xcode installation for the provided version.
 
-Make sure you have it installed and it's available inside the search path. By default, this plugin looks for Xcode installations with a search path of `/`, i.e. anywhere on your disk. To have the plugin download it, add xcodes to your tools; see [Installing missing Xcodes](#installing-missing-xcodes).
+Make sure you have it installed and it's available inside the search path. By default, this plugin looks for Xcode installations with a search path of `/`, i.e. anywhere on your disk. To have the plugin install it, see [Installing Xcode](#installing-xcode).
 
 The plugin links each mise installation to the selected Xcode's `Contents/Developer` directory. If you move or rename the Xcode application after selecting it, run `mise install` to refresh the link.
 
@@ -153,4 +145,4 @@ Double check that the Xcode version you're trying to use is listed in [qasim/Xco
 
 ### ```Couldn't download Xcode <version>. xcodes needs to sign in to your Apple ID, and it can't ask you for it here.```
 
-xcodes needs your Apple ID, and nothing could be typed into this run. See [Signing in to your Apple ID](#signing-in-to-your-apple-id).
+See [Signing in](#signing-in).
