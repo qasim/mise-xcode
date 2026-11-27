@@ -1,6 +1,10 @@
 local cmd = require("cmd")
+local system = require("system")
 local http = require("http")
 local json = require("json")
+local util = require("util")
+
+local trim, shell_quote, split_lines = util.trim, util.shell_quote, util.split_lines
 
 local xcode = {}
 
@@ -11,17 +15,9 @@ xcode.github_api_repo_url = "https://api.github.com/repos/qasim/Xcode"
 local records_cache = nil
 local records_by_version_cache = nil
 
-local function trim(value)
-  return tostring(value or ""):gsub("^%s+", ""):gsub("%s+$", "")
-end
-
-local function shell_quote(value)
-  return "'" .. tostring(value):gsub("'", "'\\''") .. "'"
-end
-
 local function command_succeeds(command)
   return pcall(function()
-    cmd.exec(command, { timeout = 10000 })
+    cmd.exec(command, { timeout = 10 })
   end)
 end
 
@@ -39,20 +35,12 @@ end
 
 local function symlink_target(path)
   local ok, target = pcall(function()
-    return cmd.exec("readlink " .. shell_quote(path), { timeout = 10000 })
+    return cmd.exec("readlink " .. shell_quote(path), { timeout = 10 })
   end)
   if ok then
     return trim(target)
   end
   return nil
-end
-
-local function split_lines(value)
-  local lines = {}
-  for line in tostring(value or ""):gmatch("[^\r\n]+") do
-    table.insert(lines, line)
-  end
-  return lines
 end
 
 local function path_is_within(path, parent)
@@ -68,7 +56,7 @@ end
 
 local function selected_xcode_bundle_path(search_path)
   local ok, output = pcall(function()
-    return cmd.exec("/usr/bin/xcode-select -p", { timeout = 10000 })
+    return cmd.exec(system.xcode_select .. " -p", { timeout = 10 })
   end)
   if not ok then
     return nil
@@ -158,7 +146,7 @@ local function load_tag_records()
   end
 
   local output = cmd.exec("git ls-remote --tags --refs " .. shell_quote(xcode.github_tags_url), {
-    timeout = 30000,
+    timeout = 30,
   })
   local by_version = {}
 
@@ -216,10 +204,10 @@ function xcode.available_versions()
   return result
 end
 
-function xcode.record_for_version(version, search_path)
+function xcode.record_for_version(version, search_path, install_dir)
   local records = records_for_version(version)
   for _, record in ipairs(records) do
-    if xcode.find_developer_dir(record.build, search_path) ~= nil then
+    if xcode.find_developer_dir(record.build, search_path, install_dir) ~= nil then
       return record
     end
   end
@@ -253,15 +241,15 @@ function xcode.resolve_version(version)
   return nil
 end
 
-function xcode.build_for_version(version, search_path)
+function xcode.build_for_version(version, search_path, install_dir)
   local resolved_version = xcode.resolve_version(version)
   if resolved_version == nil then
-    error("No Xcode version exists that corresponds to " .. version .. ".")
+    error("No Xcode release matches version " .. version .. ".", 0)
   end
 
-  local record = xcode.record_for_version(resolved_version, search_path)
+  local record = xcode.record_for_version(resolved_version, search_path, install_dir)
   if record == nil then
-    error("No Xcode version exists that corresponds to " .. version .. ".")
+    error("No Xcode release matches version " .. version .. ".", 0)
   end
 
   return record.build, record.version, record
@@ -269,8 +257,10 @@ end
 
 local function xcode_bundle_paths(search_path)
   local query = "kMDItemCFBundleIdentifier='com.apple.dt.Xcode'"
-  local output =
-    cmd.exec("mdfind -onlyin " .. shell_quote(search_path or "/") .. " " .. shell_quote(query), { timeout = 30000 })
+  local output = cmd.exec(
+    system.mdfind .. " -onlyin " .. shell_quote(search_path or "/") .. " " .. shell_quote(query),
+    { timeout = 30 }
+  )
   return split_lines(output)
 end
 
@@ -278,17 +268,45 @@ local function product_build_version(bundle_path)
   local plist_path = bundle_path .. "/Contents/version.plist"
   local output = cmd.exec(
     "/usr/libexec/PlistBuddy -c " .. shell_quote("print 'ProductBuildVersion'") .. " " .. shell_quote(plist_path),
-    { timeout = 10000 }
+    { timeout = 10 }
   )
   return trim(output)
 end
 
-function xcode.find_developer_dir(build, search_path)
+-- Lists apps directly inside a folder. Unlike Spotlight, this also sees
+-- Xcodes that were installed moments ago and are not indexed yet.
+local function direct_bundle_paths(directory, search_path)
+  if directory == nil or not path_is_within(directory, search_path or "/") then
+    return {}
+  end
+  local ok, output = pcall(function()
+    return cmd.exec("ls -1 " .. shell_quote(directory), { timeout = 10 })
+  end)
+  if not ok then
+    return {}
+  end
+  local paths = {}
+  for _, name in ipairs(split_lines(output)) do
+    if name:match("^Xcode.*%.app$") then
+      table.insert(paths, directory .. "/" .. name)
+    end
+  end
+  return paths
+end
+
+function xcode.find_developer_dir(build, search_path, install_dir)
   local selected_bundle_path = selected_xcode_bundle_path(search_path or "/")
   if selected_bundle_path ~= nil then
     local ok, selected_build = pcall(product_build_version, selected_bundle_path)
     if ok and selected_build == build then
       return selected_bundle_path .. "/Contents/Developer"
+    end
+  end
+
+  for _, bundle_path in ipairs(direct_bundle_paths(install_dir or system.applications, search_path)) do
+    local ok, bundle_build = pcall(product_build_version, bundle_path)
+    if ok and bundle_build == build then
+      return bundle_path .. "/Contents/Developer"
     end
   end
 
@@ -329,15 +347,25 @@ function xcode.installation_hint(record)
   return record.installation_url
 end
 
-function xcode.require_developer_dir(version, build, search_path, record)
-  local developer_dir = xcode.find_developer_dir(build, search_path)
+-- suggest_xcodes says whether adding xcodes would let the plugin download the
+-- missing Xcode, which is not the case when the install option is off.
+function xcode.require_developer_dir(version, build, search_path, record, install_dir, suggest_xcodes)
+  local developer_dir = xcode.find_developer_dir(build, search_path, install_dir)
   if developer_dir == nil then
-    local message = "No Xcode " .. version .. " installation found within search path."
-    local installation_hint = xcode.installation_hint(record)
-    if installation_hint ~= nil and installation_hint ~= "" then
-      message = message .. "\nInstall it from: " .. installation_hint
+    local message = "No Xcode " .. version .. " (" .. build .. ") found in the search path."
+    local download_url = xcode.installation_hint(record)
+    local has_url = download_url ~= nil and download_url ~= ""
+    if has_url and suggest_xcodes then
+      message = message
+        .. "\nDownload it from "
+        .. download_url
+        .. ", or add xcodes to [tools] so mise can download it."
+    elseif has_url then
+      message = message .. "\nDownload it from " .. download_url .. "."
+    elseif suggest_xcodes then
+      message = message .. "\nAdd xcodes to [tools] so mise can download it."
     end
-    error(message)
+    error(message, 0)
   end
   return developer_dir
 end
@@ -345,18 +373,20 @@ end
 function xcode.write_developer_dir_install(path, developer_dir)
   local parent = path:match("^(.*)/[^/]+$")
   if parent ~= nil then
-    cmd.exec("mkdir -p " .. shell_quote(parent), { timeout = 10000 })
+    cmd.exec("mkdir -p " .. shell_quote(parent), { timeout = 10 })
   end
 
   if path_is_symlink(path) then
-    cmd.exec("rm -f " .. shell_quote(path), { timeout = 10000 })
+    cmd.exec("rm -f " .. shell_quote(path), { timeout = 10 })
   elseif path_is_directory(path) then
-    cmd.exec("rmdir " .. shell_quote(path), { timeout = 10000 })
+    -- Clear what older versions of this plugin kept in the install folder.
+    cmd.exec("rm -f " .. shell_quote(path .. "/Developer") .. " " .. shell_quote(path .. "/BUILD"), { timeout = 10 })
+    cmd.exec("rmdir " .. shell_quote(path), { timeout = 10 })
   elseif path_exists(path) then
-    cmd.exec("rm -f " .. shell_quote(path), { timeout = 10000 })
+    cmd.exec("rm -f " .. shell_quote(path), { timeout = 10 })
   end
 
-  cmd.exec("ln -s " .. shell_quote(developer_dir) .. " " .. shell_quote(path), { timeout = 10000 })
+  cmd.exec("ln -s " .. shell_quote(developer_dir) .. " " .. shell_quote(path), { timeout = 10 })
 end
 
 function xcode.read_build_file(path)
@@ -377,13 +407,17 @@ function xcode.developer_dir_for_install(path, search_path)
     return symlink_target(link_path) or link_path
   end
 
+  -- Without a BUILD file this is not an older install but one still in
+  -- progress, which PostInstall is about to replace with a symlink.
   local build_ok, build = pcall(xcode.read_build_file, path)
+  if not build_ok or build == "" then
+    return path .. "/Xcode-not-installed"
+  end
+
   local developer_dir = nil
-  if build_ok and build ~= "" then
-    local find_ok, result = pcall(xcode.find_developer_dir, build, search_path)
-    if find_ok then
-      developer_dir = result
-    end
+  local find_ok, result = pcall(xcode.find_developer_dir, build, search_path)
+  if find_ok then
+    developer_dir = result
   end
 
   local target = developer_dir or (path .. "/Xcode-not-installed")
@@ -393,6 +427,20 @@ function xcode.developer_dir_for_install(path, search_path)
     return symlink_target(link_path) or link_path
   end
   return developer_dir or link_path
+end
+
+-- Where new Xcodes are installed: install_dir, else a narrowed search_path,
+-- else /Applications. It is kept inside the search path so the result is found.
+function xcode.install_dir(options)
+  local directory = options.install_dir
+  if directory == nil or directory == "" then
+    local search_path = tostring(options.search_path or "/"):gsub("/+$", "")
+    directory = search_path ~= "" and search_path or system.applications
+  end
+  if directory:sub(1, 2) == "~/" then
+    directory = (os.getenv("HOME") or "") .. directory:sub(2)
+  end
+  return directory
 end
 
 function xcode.context_field(ctx, key, fallback)
