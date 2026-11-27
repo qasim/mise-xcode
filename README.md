@@ -5,8 +5,6 @@ Xcode plugin for the [Mise](https://github.com/jdx/mise) version manager.
 > [!NOTE]
 > This plugin selects the Xcode your project uses by setting `DEVELOPER_DIR`. When that Xcode is missing and [xcodes](https://github.com/XcodesOrg/xcodes) is available, it downloads and sets it up too; see [Installing missing Xcodes](#installing-missing-xcodes).
 
-The plugin knows every Xcode release, with its build and release date, from [qasim/Xcode](https://github.com/qasim/Xcode).
-
 ## Install
 
 ### Option 1: Specify the plugin inside your project's [configuration](https://mise.jdx.dev/configuration.html)
