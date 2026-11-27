@@ -645,7 +645,6 @@ local hook_files = {
   ParseLegacyFile = "parse_legacy_file",
   PostInstall = "post_install",
   PreInstall = "pre_install",
-  PreUse = "pre_use",
 }
 
 -- Runs a hook the way mise does: load its file, then call it with a context.

@@ -159,10 +159,10 @@ end
 
 -- Names a version the way Apple's list does, which xcodes matches versions
 -- against, such as "27.3.0 Beta 2" for "27.3.0-beta.2".
-local apple_labels = { beta = "Beta", rc = "Release Candidate", seed = "GM Seed" }
+local apple_labels = { beta = "Beta", rc = "Release Candidate", ["gm-seed"] = "GM Seed" }
 
 function install.apple_name(version)
-  local number, label, count = version:match("^([%d%.]+)%-?(%a*)%.?(%d*)$")
+  local number, label, count = version:match("^([%d%.]+)%-?([%a%-]*)%.?(%d*)$")
   if number == nil or (label ~= "" and apple_labels[label] == nil) then
     return nil
   end

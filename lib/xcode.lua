@@ -215,29 +215,51 @@ function xcode.record_for_version(version, search_path, install_dir)
   return records[1]
 end
 
-function xcode.latest_stable_version()
-  for _, record in ipairs(tag_records()) do
-    if record.version:find("-", 1, true) == nil then
-      return record.version
-    end
+-- Pre-release labels as people write them, and as the tags name them. GM
+-- seeds were tagged "-seed" before they were "-gm-seed".
+local labels = { beta = "beta", rc = "rc", ["gm-seed"] = "gm-seed", seed = "gm-seed" }
+
+-- The tag version a spelling names: "27.2-rc.1" is "27.2.0-rc", and
+-- "11.5.0-seed" is "11.5.0-gm-seed". Returns nil for anything else.
+local function tag_version(written)
+  local number, label, count = written:match("^(%d+[%.%d]*)%-([%a%-]+)%.?(%d*)$")
+  if number == nil then
+    number, label, count = written:match("^(%d+[%.%d]*)$"), nil, ""
   end
-  return nil
+  if number == nil or number:find("..", 1, true) or number:sub(-1) == "." then
+    return nil
+  end
+  local parts = {}
+  for part in number:gmatch("%d+") do
+    table.insert(parts, part)
+  end
+  if #parts > 3 then
+    return nil
+  end
+  while #parts < 3 do
+    table.insert(parts, "0")
+  end
+  local version = table.concat(parts, ".")
+  if label == nil then
+    return version
+  end
+  if labels[label] == nil or count == "0" then
+    return nil
+  end
+  version = version .. "-" .. labels[label]
+  if count ~= "" and count ~= "1" then
+    version = version .. "." .. count
+  end
+  return version
 end
 
-function xcode.resolve_version(version)
-  if version == "latest" then
-    return xcode.latest_stable_version()
+-- mise matches prefixes such as "27" and resolves "latest" itself, so a
+-- version reaches the plugin either as tagged or spelled another way.
+function xcode.resolve_version(written)
+  local version = tag_version(written)
+  if version ~= nil and #records_for_version(version) > 0 then
+    return version
   end
-
-  for _, record in ipairs(tag_records()) do
-    if record.version == version then
-      return record.version
-    end
-    if record.version:match("^" .. version:gsub("%.", "%%.") .. "%.") then
-      return record.version
-    end
-  end
-
   return nil
 end
 
