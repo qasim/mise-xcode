@@ -192,3 +192,21 @@ test("with install = false, neither downloads nor sets up", function()
   check.equal(result.note, "Selected Xcode 27.2.0 (27B52)")
   check.lines(world.transcript, {})
 end)
+
+test("signs xcodes in with fastlane's session when FASTLANE_SESSION is set", function()
+  local world = mac.new({
+    tags = { "27.2.0+27B52" },
+    xcodes = { saved = { xcode_27_2() }, signed_in = false },
+    env = { FASTLANE_SESSION = "---\n- !ruby/object:HTTP::Cookie" },
+  })
+
+  world:hook("PreInstall", { version = "27.2.0" })
+
+  check.lines(
+    world.transcript,
+    concat({
+      "> (1/3) Downloading Xcode 27.2.0 (27B52) with xcodes",
+      "$ xcodes download 27.2 --use-fastlane-auth --directory " .. cache,
+    }, unpack_and_set_up)
+  )
+end)

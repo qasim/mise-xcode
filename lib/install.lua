@@ -278,10 +278,14 @@ local function download_with_xcodes(xcodes_path, version, build, directory, step
       .. ") with xcodes"
       .. (from_apple and ", from Apple's list, as xcodereleases.com does not list it yet" or "")
   )
+  -- A session made with `fastlane spaceauth` lets xcodes sign in without anyone
+  -- answering a prompt, as in CI.
+  local fastlane_session = os.getenv("FASTLANE_SESSION")
   local command = shell_quote(xcodes_path)
     .. " download "
     .. shell_quote(name)
     .. (from_apple and " --data-source apple" or "")
+    .. ((fastlane_session ~= nil and fastlane_session ~= "") and " --use-fastlane-auth" or "")
     .. " --directory "
     .. shell_quote(directory)
     .. " --no-color"

@@ -515,7 +515,12 @@ function World:xcodes_command(argv, mode, cwd)
       -- xcodes keeps one list, which Apple's replaces.
       xcodes.list_from = "apple"
     end
-    if not xcodes.signed_in then
+    -- With --use-fastlane-auth, xcodes signs in with fastlane's session.
+    local fastlane = false
+    for _, word in ipairs(argv) do
+      fastlane = fastlane or (word == "--use-fastlane-auth" and self.env.FASTLANE_SESSION ~= nil)
+    end
+    if not xcodes.signed_in and not fastlane then
       if not (mode.interactive and self.terminal) then
         -- lib/progress.pl stops a download that asks for a sign-in with 75.
         return "", 75, cwd
