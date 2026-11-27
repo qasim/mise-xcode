@@ -1,10 +1,10 @@
-local cmd = require("cmd")
+local command = require("command")
 local system = require("system")
 local http = require("http")
 local json = require("json")
 local util = require("util")
 
-local trim, shell_quote, split_lines = util.trim, util.shell_quote, util.split_lines
+local trim, split_lines = util.trim, util.split_lines
 
 local xcode = {}
 
@@ -14,27 +14,25 @@ xcode.releases_url = "https://raw.githubusercontent.com/qasim/Xcode/main/release
 local records_cache = nil
 local records_by_version_cache = nil
 
-local function command_succeeds(command)
-  return pcall(function()
-    cmd.exec(command, { timeout = 10 })
-  end)
+local function test(flag, path)
+  return command.succeeds({ "test", flag, path }, { timeout = 10 })
 end
 
 local function path_exists(path)
-  return command_succeeds("test -e " .. shell_quote(path)) or command_succeeds("test -L " .. shell_quote(path))
+  return test("-e", path) or test("-L", path)
 end
 
 local function path_is_directory(path)
-  return command_succeeds("test -d " .. shell_quote(path))
+  return test("-d", path)
 end
 
 local function path_is_symlink(path)
-  return command_succeeds("test -L " .. shell_quote(path))
+  return test("-L", path)
 end
 
 local function symlink_target(path)
   local ok, target = pcall(function()
-    return cmd.exec("readlink " .. shell_quote(path), { timeout = 10 })
+    return command.output({ "readlink", path }, { timeout = 10 })
   end)
   if ok then
     return trim(target)
@@ -55,7 +53,7 @@ end
 
 local function selected_xcode_bundle_path(search_path)
   local ok, output = pcall(function()
-    return cmd.exec(system.xcode_select .. " -p", { timeout = 10 })
+    return command.output({ system.xcode_select, "-p" }, { timeout = 10 })
   end)
   if not ok then
     return nil
@@ -223,17 +221,14 @@ end
 
 local function xcode_bundle_paths(search_path)
   local query = "kMDItemCFBundleIdentifier='com.apple.dt.Xcode'"
-  local output = cmd.exec(
-    system.mdfind .. " -onlyin " .. shell_quote(search_path or "/") .. " " .. shell_quote(query),
-    { timeout = 30 }
-  )
+  local output = command.output({ system.mdfind, "-onlyin", search_path or "/", query }, { timeout = 30 })
   return split_lines(output)
 end
 
 local function product_build_version(bundle_path)
   local plist_path = bundle_path .. "/Contents/version.plist"
-  local output = cmd.exec(
-    "/usr/libexec/PlistBuddy -c " .. shell_quote("print 'ProductBuildVersion'") .. " " .. shell_quote(plist_path),
+  local output = command.output(
+    { "/usr/libexec/PlistBuddy", "-c", "Print :ProductBuildVersion", plist_path },
     { timeout = 10 }
   )
   return trim(output)
@@ -246,7 +241,7 @@ local function direct_bundle_paths(directory, search_path)
     return {}
   end
   local ok, output = pcall(function()
-    return cmd.exec("ls -1 " .. shell_quote(directory), { timeout = 10 })
+    return command.output({ "ls", "-1", directory }, { timeout = 10 })
   end)
   if not ok then
     return {}
@@ -315,20 +310,20 @@ end
 function xcode.write_developer_dir_install(path, developer_dir)
   local parent = path:match("^(.*)/[^/]+$")
   if parent ~= nil then
-    cmd.exec("mkdir -p " .. shell_quote(parent), { timeout = 10 })
+    command.output({ "mkdir", "-p", parent }, { timeout = 10 })
   end
 
   if path_is_symlink(path) then
-    cmd.exec("rm -f " .. shell_quote(path), { timeout = 10 })
+    command.output({ "rm", "-f", path }, { timeout = 10 })
   elseif path_is_directory(path) then
     -- Clear what older versions of this plugin kept in the install folder.
-    cmd.exec("rm -f " .. shell_quote(path .. "/Developer") .. " " .. shell_quote(path .. "/BUILD"), { timeout = 10 })
-    cmd.exec("rmdir " .. shell_quote(path), { timeout = 10 })
+    command.output({ "rm", "-f", path .. "/Developer", path .. "/BUILD" }, { timeout = 10 })
+    command.output({ "rmdir", path }, { timeout = 10 })
   elseif path_exists(path) then
-    cmd.exec("rm -f " .. shell_quote(path), { timeout = 10 })
+    command.output({ "rm", "-f", path }, { timeout = 10 })
   end
 
-  cmd.exec("ln -s " .. shell_quote(developer_dir) .. " " .. shell_quote(path), { timeout = 10 })
+  command.output({ "ln", "-s", developer_dir, path }, { timeout = 10 })
 end
 
 function xcode.read_build_file(path)
@@ -363,7 +358,7 @@ function xcode.developer_dir_for_install(path, search_path)
   end
 
   local target = developer_dir or (path .. "/Xcode-not-installed")
-  command_succeeds("ln -s " .. shell_quote(target) .. " " .. shell_quote(link_path))
+  command.succeeds({ "ln", "-s", target, link_path }, { timeout = 10 })
 
   if path_exists(link_path) then
     return symlink_target(link_path) or link_path

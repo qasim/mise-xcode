@@ -5,40 +5,17 @@
 -- the download (unpacking, verification, first-launch setup and extra
 -- components) is handled here.
 
-local cmd = require("cmd")
+local command = require("command")
 local json = require("json")
 local system = require("system")
 local util = require("util")
 
-local trim, shell_quote, split_lines = util.trim, util.shell_quote, util.split_lines
+local trim, split_lines = util.trim, util.split_lines
 
 local install = {}
 
 -- Xcode is signed by Apple as com.apple.dt.Xcode.
 local xcode_requirement = '=anchor apple and identifier "com.apple.dt.Xcode"'
-
--- Ends the output of commands whose exit code the plugin reads from it, as
--- "<marker><code>". mise's own command runner reports only success or failure.
-local exit_marker = "__mise_xcode_exit_"
-
-local function exec(command, options)
-  return cmd.exec(command, options or {})
-end
-
-local function succeeds(command, options)
-  return pcall(cmd.exec, command, options or { timeout = 30 })
-end
-
--- Runs a command that may need to prompt the user, such as for an Apple ID
--- sign-in or a sudo password, and returns whether it succeeded. `cmd.stream`
--- hands mise's terminal to the command; mise versions without it fall back to
--- os.execute, which works when no prompt is needed.
-local function run_interactive(command)
-  if type(cmd.stream) == "function" then
-    return cmd.stream(command) == 0
-  end
-  return os.execute(command) == 0
-end
 
 -- Tells the user what is happening during steps that take a while.
 local function say(message)
@@ -59,17 +36,6 @@ end
 
 local function this_step(steps)
   return "(" .. steps.current .. "/" .. steps.total .. ") "
-end
-
--- True when mise runs in a terminal that commands can prompt in. It is false
--- for agents, CI and other runs without a terminal.
-local prompt_available = nil
-
-local function can_prompt()
-  if prompt_available == nil then
-    prompt_available = type(cmd.stream) == "function" and cmd.stream("test -t 0") == 0
-  end
-  return prompt_available
 end
 
 -- Tool options may arrive as booleans, strings, lists or newline-joined strings.
@@ -100,12 +66,13 @@ function install.option_enabled(value, default)
   return not (normalized == "false" or normalized == "0" or normalized == "no" or normalized == "off")
 end
 
-local function home_directory()
-  local home = os.getenv("HOME")
-  if home == nil or home == "" then
-    home = trim(exec('printf %s "$HOME"'))
+-- A command run with DEVELOPER_DIR set to the given Xcode.
+local function with_developer_dir(developer_dir, words)
+  local result = { "/usr/bin/env", "DEVELOPER_DIR=" .. developer_dir }
+  for _, word in ipairs(words) do
+    table.insert(result, word)
   end
-  return home
+  return result
 end
 
 -- Downloads are kept in mise's cache folder, so `mise cache clear` removes leftovers.
@@ -114,7 +81,7 @@ local function cache_directory(build)
   if base == nil or base == "" then
     local xdg = os.getenv("XDG_CACHE_HOME")
     if xdg == nil or xdg == "" then
-      xdg = home_directory() .. "/Library/Caches"
+      xdg = (os.getenv("HOME") or "") .. "/Library/Caches"
     end
     base = xdg .. "/mise"
   end
@@ -123,7 +90,7 @@ end
 
 -- Returns the path of a working xcodes executable, or nil.
 function install.xcodes_path()
-  local ok, output = pcall(cmd.exec, "command -v xcodes", { timeout = 10 })
+  local ok, output = pcall(command.output, { "command", "-v", "xcodes" }, { timeout = 10 })
   if not ok then
     return nil
   end
@@ -132,7 +99,7 @@ function install.xcodes_path()
     return nil
   end
   -- A mise shim without a selected version exists on PATH but cannot run.
-  if not succeeds(shell_quote(path) .. " version") then
+  if not command.succeeds({ path, "version" }, { timeout = 30 }) then
     return nil
   end
   return path
@@ -141,7 +108,7 @@ end
 -- xcodes names releases after Apple ("27.0 Beta 3"), not semver, so the
 -- release is looked up by its build number instead of translating versions.
 function install.xcodes_name_for_build(xcodes_path, build)
-  local output = exec(shell_quote(xcodes_path) .. " list --no-color", { timeout = 120 })
+  local output = command.output({ xcodes_path, "list", "--no-color" }, { timeout = 120 })
   for _, line in ipairs(split_lines(output)) do
     local name, line_build = line:match("^(.-)%s+%(([%w]+)%)")
     if name ~= nil and line_build == build then
@@ -154,7 +121,7 @@ end
 -- Refreshes the list xcodes keeps from xcodereleases.com, which needs no
 -- sign-in. Returns whether it worked.
 local function update_xcodes_list(xcodes_path)
-  return pcall(exec, shell_quote(xcodes_path) .. " update --no-color", { timeout = 120 })
+  return command.succeeds({ xcodes_path, "update", "--no-color" }, { timeout = 120 })
 end
 
 -- Names a version the way Apple's list does, which xcodes matches versions
@@ -177,7 +144,7 @@ function install.apple_name(version)
 end
 
 local function find_archive(directory)
-  local ok, output = pcall(cmd.exec, "ls -1 " .. shell_quote(directory), { timeout = 10 })
+  local ok, output = pcall(command.output, { "ls", "-1", directory }, { timeout = 10 })
   if not ok then
     return nil
   end
@@ -194,60 +161,6 @@ local function find_archive(directory)
     end
   end
   return nil
-end
-
--- Exit code of lib/progress.pl when xcodes stopped to ask for a sign-in.
-local wants_sign_in_code = 75
-
--- The command that tidies a tool's output with lib/progress.pl. With
--- `prefixed`, its lines start with "mise [xcode] " like the plugin's own,
--- for output that goes straight to the terminal; mise names the plugin's
--- folder after the plugin.
-local function progress_filter(label, step, prefixed, interactive)
-  local plugin = prefixed and (RUNTIME.pluginDirPath:match("([^/]+)/*$") or "xcode") or ""
-  return "/usr/bin/perl "
-    .. shell_quote(RUNTIME.pluginDirPath .. "/lib/progress.pl")
-    .. (interactive and " --interactive" or "")
-    .. " "
-    .. shell_quote(label)
-    .. " "
-    .. shell_quote(step or "")
-    .. " "
-    .. shell_quote(plugin)
-end
-
--- Runs a command and prints each line of its output through mise, which
--- keeps its progress display below them. Returns the command's exit code.
---
--- Output streamed with cmd.stream goes straight to the terminal instead, and
--- mise leaves a frozen copy of its progress display above it, so that is only
--- used when someone has to type an answer.
-local function run_printing(command)
-  local handle = io.popen(command .. "; printf '\\n" .. exit_marker .. "%s\\n' $?", "r")
-  local code = nil
-  for line in handle:lines() do
-    local exit_code = line:match("^" .. exit_marker .. "(%d+)$")
-    if exit_code ~= nil then
-      code = tonumber(exit_code)
-    elseif line ~= "" then
-      say(line)
-    end
-  end
-  handle:close()
-  return code
-end
-
--- Runs a download with xcodes or xcodebuild and shows its output in one style
--- through lib/progress.pl. The tool runs in a pseudo-terminal so it reports
--- progress as it goes, with no input so the user's terminal is left alone.
--- Returns whether it succeeded and whether it stopped to ask for a sign-in.
-local function run_with_progress(command, label, step)
-  local pipeline = "/usr/bin/script -q /dev/null /bin/sh -c "
-    .. shell_quote(command)
-    .. " </dev/null | "
-    .. progress_filter(label, step, false)
-  local code = run_printing("/bin/bash -o pipefail -c " .. shell_quote(pipeline))
-  return code == 0, code == wants_sign_in_code
 end
 
 local function download_with_xcodes(xcodes_path, version, build, directory, steps)
@@ -278,29 +191,30 @@ local function download_with_xcodes(xcodes_path, version, build, directory, step
       .. ") with xcodes"
       .. (from_apple and ", from Apple's list, as xcodereleases.com does not list it yet" or "")
   )
+  local download = { xcodes_path, "download", name }
+  if from_apple then
+    table.insert(download, "--data-source")
+    table.insert(download, "apple")
+  end
   -- A session from `fastlane spaceauth` lets xcodes sign in without a prompt,
   -- such as in CI.
   local fastlane_session = os.getenv("FASTLANE_SESSION")
-  local command = shell_quote(xcodes_path)
-    .. " download "
-    .. shell_quote(name)
-    .. (from_apple and " --data-source apple" or "")
-    .. ((fastlane_session ~= nil and fastlane_session ~= "") and " --use-fastlane-auth" or "")
-    .. " --directory "
-    .. shell_quote(directory)
-    .. " --no-color"
+  if fastlane_session ~= nil and fastlane_session ~= "" then
+    table.insert(download, "--use-fastlane-auth")
+  end
+  for _, word in ipairs({ "--directory", directory, "--no-color" }) do
+    table.insert(download, word)
+  end
+
+  -- xcodes runs in a pseudo-terminal so it reports progress as it goes, with
+  -- no input so the user's terminal is left alone.
   local label = "Downloading Xcode " .. version
-  local ok, wants_sign_in = run_with_progress(command, label, this_step(steps))
-  if not ok and wants_sign_in and can_prompt() then
-    -- Signing in needs the terminal, so xcodes runs again under `script`
-    -- attached to it. The filter shows its prompts and what the person types,
-    -- and tidies the rest as before. mise's progress display stays frozen
-    -- while the terminal is handed over this way.
-    local pipeline = "/usr/bin/script -q /dev/null /bin/sh -c "
-      .. shell_quote(command)
-      .. " | "
-      .. progress_filter(label, this_step(steps), true, true)
-    ok = run_interactive("/bin/bash -o pipefail -c " .. shell_quote(pipeline))
+  local code = command.with_progress(download, label, this_step(steps), { pty = true })
+  local ok = code == 0
+  if code == command.wants_sign_in and command.has_terminal() then
+    -- Signing in needs the terminal, so xcodes runs again attached to it.
+    -- mise's progress display stays frozen while the terminal is handed over.
+    ok = command.with_progress(download, label, this_step(steps), { pty = true, terminal = true }) == 0
   end
   if from_apple then
     -- xcodes keeps one list, which Apple's replaced, so it is set back to the
@@ -309,7 +223,7 @@ local function download_with_xcodes(xcodes_path, version, build, directory, step
   end
   if not ok then
     local message = "Failed to download Xcode " .. version .. " (" .. build .. ") with xcodes."
-    if not can_prompt() then
+    if not command.has_terminal() then
       message = message
         .. "\nIf xcodes needs an Apple ID sign-in, run `mise install` in a terminal,"
         .. " or set XCODES_USERNAME and XCODES_PASSWORD."
@@ -324,56 +238,46 @@ local function download_with_xcodes(xcodes_path, version, build, directory, step
   return archive
 end
 
-local function bundle_identifier(bundle_path)
+local function plist_value(path, key)
   local ok, output = pcall(
-    cmd.exec,
-    "/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' " .. shell_quote(bundle_path .. "/Contents/Info.plist"),
+    command.output,
+    { "/usr/libexec/PlistBuddy", "-c", "Print :" .. key, path },
     { timeout = 10 }
   )
   return ok and trim(output) or nil
+end
+
+local function bundle_identifier(bundle_path)
+  return plist_value(bundle_path .. "/Contents/Info.plist", "CFBundleIdentifier")
 end
 
 local function bundle_build(bundle_path)
-  local ok, output = pcall(
-    cmd.exec,
-    "/usr/libexec/PlistBuddy -c 'Print :ProductBuildVersion' " .. shell_quote(bundle_path .. "/Contents/version.plist"),
-    { timeout = 10 }
-  )
-  return ok and trim(output) or nil
+  return plist_value(bundle_path .. "/Contents/version.plist", "ProductBuildVersion")
 end
 
 local function unpack_archive(archive, directory, version, steps)
-  exec("rm -rf " .. shell_quote(directory) .. " && mkdir -p " .. shell_quote(directory))
+  command.output({ "rm", "-rf", directory })
+  command.output({ "mkdir", "-p", directory })
 
-  local command
+  local unpack
   if archive:lower():match("%.aea$") then
-    if not succeeds("test -x " .. shell_quote(system.archiveutil)) then
+    if not command.succeeds({ "test", "-x", system.archiveutil }) then
       error("Failed to unpack " .. archive .. ": this version of macOS does not have archiveutil.", 0)
     end
-    command = "cd "
-      .. shell_quote(directory)
-      .. " && "
-      .. system.archiveutil
-      .. " extractXcodeAEA "
-      .. shell_quote(archive)
+    unpack = { system.archiveutil, "extractXcodeAEA", archive }
   else
     -- xip does not check the archive's signature; verify_bundle checks the app.
-    command = "cd " .. shell_quote(directory) .. " && " .. system.xip .. " --expand " .. shell_quote(archive)
+    unpack = { system.xip, "--expand", archive }
   end
 
   say(next_step(steps) .. "Unpacking Xcode " .. version .. ", which can take a few minutes")
   -- The plugin's own lines cover what xip prints, which is shown only on failure.
-  -- mise runs commands so that the first failure stops them, except inside an
-  -- `if` condition, which keeps xip's exit code for the marker.
-  local output =
-    exec("if (" .. command .. ") 2>&1; then code=0; else code=$?; fi; printf '\\n" .. exit_marker .. '%s\' "$code"')
-  local code = tonumber(output:match(exit_marker .. "(%d+)%s*$"))
+  local code, details = command.result(unpack, { cwd = directory })
   if code ~= 0 then
-    local details = trim((output:gsub(exit_marker .. "%d+%s*$", "")))
     error("Failed to unpack " .. archive .. ". The archive may be damaged, or the disk may be full.\n" .. details, 0)
   end
 
-  local contents = exec("ls -1 " .. shell_quote(directory))
+  local contents = command.output({ "ls", "-1", directory })
   for _, name in ipairs(split_lines(contents)) do
     local candidate = directory .. "/" .. name
     if name:match("%.app$") and bundle_identifier(candidate) == "com.apple.dt.Xcode" then
@@ -392,15 +296,11 @@ local function verify_bundle(bundle_path, version, build)
 
   -- Checking the signature, not just who signed it, also catches an app that
   -- was changed after it was signed. It takes about 15 seconds.
-  local signed = succeeds(
-    system.codesign .. " --verify --strict -R " .. shell_quote(xcode_requirement) .. " " .. shell_quote(bundle_path),
-    {}
-  )
-  if not signed then
+  if not command.succeeds({ system.codesign, "--verify", "--strict", "-R", xcode_requirement, bundle_path }) then
     error(refused .. "it is not signed by Apple.", 0)
   end
 
-  if not succeeds(system.spctl .. " --assess --type execute " .. shell_quote(bundle_path), {}) then
+  if not command.succeeds({ system.spctl, "--assess", "--type", "execute", bundle_path }) then
     error(refused .. "Gatekeeper rejected it.", 0)
   end
 end
@@ -414,7 +314,7 @@ function install.install_xcode(version, build, install_dir, steps)
   end
 
   local destination = install_dir .. "/Xcode-" .. version .. ".app"
-  if succeeds("test -e " .. shell_quote(destination)) then
+  if command.succeeds({ "test", "-e", destination }) then
     error(
       "Cannot install Xcode "
         .. version
@@ -428,7 +328,7 @@ function install.install_xcode(version, build, install_dir, steps)
   end
 
   -- Checked before downloading, which takes much longer than this.
-  if not succeeds("mkdir -p " .. shell_quote(install_dir) .. " && test -w " .. shell_quote(install_dir)) then
+  if not (command.succeeds({ "mkdir", "-p", install_dir }) and command.succeeds({ "test", "-w", install_dir })) then
     error(
       "Cannot install Xcode "
         .. version
@@ -442,7 +342,7 @@ function install.install_xcode(version, build, install_dir, steps)
   end
 
   local directory = cache_directory(build)
-  exec("mkdir -p " .. shell_quote(directory))
+  command.output({ "mkdir", "-p", directory })
 
   -- An archive left by an earlier attempt that failed after downloading is reused.
   local archive = find_archive(directory)
@@ -459,11 +359,11 @@ function install.install_xcode(version, build, install_dir, steps)
   end)
   if not ok then
     -- A damaged or wrong archive would otherwise be reused on the next try.
-    exec("rm -rf " .. shell_quote(directory))
+    command.output({ "rm", "-rf", directory })
     error(bundle_path, 0)
   end
 
-  if not succeeds("mv " .. shell_quote(bundle_path) .. " " .. shell_quote(destination), {}) then
+  if not command.succeeds({ "mv", bundle_path, destination }) then
     error(
       "Failed to move Xcode "
         .. version
@@ -474,36 +374,32 @@ function install.install_xcode(version, build, install_dir, steps)
     )
   end
 
-  exec("rm -rf " .. shell_quote(directory))
+  command.output({ "rm", "-rf", directory })
   say(this_step(steps) .. "Installed Xcode " .. version .. " (" .. build .. ") at " .. destination)
   return destination
 end
 
-local function developer_env(developer_dir)
-  return "DEVELOPER_DIR=" .. shell_quote(developer_dir) .. " "
-end
-
 local function first_launch_complete(developer_dir)
-  return succeeds(developer_env(developer_dir) .. system.xcodebuild .. " -checkFirstLaunchStatus")
+  return command.succeeds(with_developer_dir(developer_dir, { system.xcodebuild, "-checkFirstLaunchStatus" }))
 end
 
 function install.needs_setup(developer_dir)
   return not first_launch_complete(developer_dir)
 end
 
--- Accepts the license and installs the packages Xcode would otherwise ask
--- for on first launch, without opening Xcode.
+-- Does what Xcode asks for the first time it opens, so its tools work from
+-- the command line without opening it: accepts the license, installs its
+-- first-launch packages, and turns on developer mode, so debugging doesn't
+-- ask for a password. Each step needs an administrator, as it does in Xcode.
 local function run_first_launch(developer_dir, version, steps)
-  local env = developer_env(developer_dir)
-  local script = table.concat({
-    "set -e",
-    env .. system.xcodebuild .. " -license accept",
-    env .. system.xcodebuild .. " -runFirstLaunch",
-    system.devtoolssecurity .. " -enable",
-    system.dseditgroup .. " -o edit -t group -a staff _developer",
-  }, "; ")
-  local password_cached = succeeds(system.sudo .. " -n true")
-  if not password_cached and not can_prompt() then
+  local script = command.script({
+    with_developer_dir(developer_dir, { system.xcodebuild, "-license", "accept" }),
+    with_developer_dir(developer_dir, { system.xcodebuild, "-runFirstLaunch" }),
+    { system.devtoolssecurity, "-enable" },
+    { system.dseditgroup, "-o", "edit", "-t", "group", "-a", "staff", "_developer" },
+  })
+  local password_cached = command.succeeds({ system.sudo, "-n", "true" })
+  if not password_cached and not command.has_terminal() then
     error(
       "Xcode "
         .. version
@@ -520,22 +416,22 @@ local function run_first_launch(developer_dir, version, steps)
       .. ": accepting the license and installing the packages Xcode asks for on first launch"
       .. (password_cached and "" or ", which needs your administrator password")
   )
-  -- sudo asks for a password on the terminal itself, so only the output of the
-  -- setup commands goes through the filter. Without a password to ask for, it
-  -- needs no terminal, and its lines go through mise like the rest.
-  local ok
+  -- The steps run in one sudo, which asks for the password at most once.
+  -- -n makes sudo fail instead of asking, should the saved password expire
+  -- before this runs without a terminal.
+  local code
   if password_cached then
-    -- -n makes sudo fail instead of asking, should the saved password expire
-    -- before this runs, because nothing here could show its prompt.
-    local command = system.sudo .. " -n /bin/sh -c " .. shell_quote(script)
-    local pipeline = command .. " </dev/null 2>&1 | " .. progress_filter("Installing packages", this_step(steps), false)
-    ok = run_printing("/bin/bash -o pipefail -c " .. shell_quote(pipeline)) == 0
+    code =
+      command.with_progress({ system.sudo, "-n", "/bin/sh", "-c", script }, "Installing packages", this_step(steps))
   else
-    local command = system.sudo .. " /bin/sh -c " .. shell_quote(script)
-    local pipeline = command .. " 2>&1 | " .. progress_filter("Installing packages", this_step(steps), true)
-    ok = run_interactive("/bin/bash -o pipefail -c " .. shell_quote(pipeline))
+    code = command.with_progress(
+      { system.sudo, "/bin/sh", "-c", script },
+      "Installing packages",
+      this_step(steps),
+      { terminal = true }
+    )
   end
-  if not ok then
+  if code ~= 0 then
     -- sudo and the setup commands print why above.
     error("Failed to set up Xcode " .. version .. ".\nRun `mise install` to try again.", 0)
   end
@@ -549,17 +445,14 @@ local function mark_install_checked(bundle_path)
   if build == nil then
     return
   end
-  pcall(
-    cmd.exec,
-    'touch "$('
-      .. system.getconf
-      .. " DARWIN_USER_CACHE_DIR)com.apple.dt.Xcode.InstallCheckCache_$("
-      .. system.sw_vers
-      .. " -buildVersion)_"
-      .. build
-      .. '"',
-    { timeout = 10 }
-  )
+  pcall(function()
+    local cache = trim(command.output({ system.getconf, "DARWIN_USER_CACHE_DIR" }, { timeout = 10 }))
+    local macos_build = trim(command.output({ system.sw_vers, "-buildVersion" }, { timeout = 10 }))
+    command.output(
+      { "touch", cache .. "com.apple.dt.Xcode.InstallCheckCache_" .. macos_build .. "_" .. build },
+      { timeout = 10 }
+    )
+  end)
 end
 
 -- Simulator platforms by their -downloadPlatform name: the SDK name and
@@ -571,8 +464,16 @@ local platforms = {
   visionos = { sdk = "xros", simulator = "com.apple.platform.xrsimulator", name = "visionOS" },
 }
 
+local function simctl_json(developer_dir, words)
+  local simctl = { system.xcrun, "simctl", "runtime" }
+  for _, word in ipairs(words) do
+    table.insert(simctl, word)
+  end
+  return json.decode(command.output(with_developer_dir(developer_dir, simctl), { timeout = 60 }))
+end
+
 local function installed_runtimes(developer_dir)
-  return json.decode(exec(developer_env(developer_dir) .. system.xcrun .. " simctl runtime list -j", { timeout = 60 }))
+  return simctl_json(developer_dir, { "list", "-j" })
 end
 
 -- Returns the build of the ready runtime with exactly this version, such as
@@ -617,9 +518,8 @@ local components = {
 -- for every SDK even when it is missing, so the build is checked against the
 -- installed runtimes.
 local function platform_status(developer_dir, known)
-  local env = developer_env(developer_dir)
   local ok, sdk_version, installed_build = pcall(function()
-    local matches = json.decode(exec(env .. system.xcrun .. " simctl runtime match list -j", { timeout = 60 }))
+    local matches = simctl_json(developer_dir, { "match", "list", "-j" })
     local runtimes = installed_runtimes(developer_dir)
     for sdk, match in pairs(matches) do
       if sdk:sub(1, #known.sdk) == known.sdk then
@@ -644,13 +544,9 @@ end
 local function component_status(developer_dir, component)
   local ok, details = pcall(function()
     return json.decode(
-      exec(
-        developer_env(developer_dir)
-          .. system.xcodebuild
-          .. " -showComponent "
-          .. shell_quote(component)
-          .. " -json 2>/dev/null",
-        { timeout = 60 }
+      command.output(
+        with_developer_dir(developer_dir, { system.xcodebuild, "-showComponent", component, "-json" }),
+        { timeout = 60, quiet = true }
       )
     )
   end)
@@ -678,9 +574,19 @@ local function parse_platform(entry)
   return platforms[platform:lower()], platform, runtime_version
 end
 
-local function download_extras(developer_dir, options, version, steps)
-  local env = developer_env(developer_dir)
+-- Runs an xcodebuild download in a pseudo-terminal so it reports progress.
+-- `failed` names the download in the error if it fails.
+local function download_with_xcodebuild(developer_dir, words, name, failed, steps)
+  local download = with_developer_dir(developer_dir, { system.xcodebuild })
+  for _, word in ipairs(words) do
+    table.insert(download, word)
+  end
+  if command.with_progress(download, "Downloading " .. name, this_step(steps), { pty = true }) ~= 0 then
+    error("Failed to download " .. failed .. ".", 0)
+  end
+end
 
+local function download_extras(developer_dir, options, version, steps)
   for _, entry in ipairs(install.option_list(options.platforms)) do
     -- "iOS" is the runtime that matches this Xcode; "iOS@26.0" is an exact
     -- older version, for testing on it.
@@ -719,13 +625,12 @@ local function download_extras(developer_dir, options, version, steps)
       say(next_step(steps) .. name .. " is already installed (" .. installed_build .. ")")
     else
       say(next_step(steps) .. "Downloading " .. name)
-      local command = env .. system.xcodebuild .. " -downloadPlatform " .. shell_quote(platform)
+      local words = { "-downloadPlatform", platform }
       if runtime_version ~= nil then
-        command = command .. " -buildVersion " .. shell_quote(runtime_version)
+        table.insert(words, "-buildVersion")
+        table.insert(words, runtime_version)
       end
-      if not run_with_progress(command, "Downloading " .. name, this_step(steps)) then
-        error("Failed to download " .. name .. ".", 0)
-      end
+      download_with_xcodebuild(developer_dir, words, name, name, steps)
       say(this_step(steps) .. "Installed " .. name)
     end
   end
@@ -738,10 +643,7 @@ local function download_extras(developer_dir, options, version, steps)
       say(next_step(steps) .. name .. " is already installed" .. build_note)
     else
       say(next_step(steps) .. "Downloading " .. name .. build_note)
-      local command = env .. system.xcodebuild .. " -downloadComponent " .. shell_quote(component)
-      if not run_with_progress(command, "Downloading " .. name, this_step(steps)) then
-        error("Failed to download " .. name .. build_note .. ".", 0)
-      end
+      download_with_xcodebuild(developer_dir, { "-downloadComponent", component }, name, name .. build_note, steps)
       say(this_step(steps) .. "Installed " .. name .. build_note)
     end
   end

@@ -20,7 +20,8 @@ local mac = {}
 -- Where qasim/Xcode publishes its list of releases.
 mac.releases_url = "https://raw.githubusercontent.com/qasim/Xcode/main/releases.json"
 
-local plugin_modules = { "cmd", "file", "http", "json", "install", "system", "util", "xcode" }
+-- mise's modules, which the fake Mac provides.
+local mise_modules = { "cmd", "file", "http", "json" }
 local originals = { print = print, popen = io.popen, execute = os.execute, getenv = os.getenv }
 
 local exit_marker = "__mise_xcode_exit_"
@@ -392,10 +393,18 @@ function World:simple(argv, mode, cwd)
       return "", 1, cwd
     end
     return table.concat(self:children(argv[3]), "\n"), 0, cwd
-  elseif program == "printf" then
-    return self.home, 0, cwd
   elseif program == "touch" then
     return "", 0, cwd
+  elseif program == "/usr/bin/getconf" then
+    return "/var/folders/xx/C/\n", 0, cwd
+  elseif program == "/usr/bin/sw_vers" then
+    return "25A354\n", 0, cwd
+  elseif program == "/usr/bin/env" then
+    local inner = {}
+    for index = 2, #argv do
+      table.insert(inner, argv[index])
+    end
+    return self:simple(inner, mode, cwd)
   elseif program == "/usr/bin/xcode-select" then
     if self.selected == nil then
       return "", 1, cwd
@@ -426,9 +435,13 @@ function World:simple(argv, mode, cwd)
     return "/opt/xcodes\n", 0, cwd
   elseif program == "/opt/xcodes" then
     return self:xcodes_command(argv, mode, cwd)
-  elseif program == "/usr/bin/script" or program == "/bin/sh" then
-    local output, code = self:run(argv[#argv], mode)
-    return output, code, cwd
+  elseif program == "/usr/bin/script" then
+    -- script -q /dev/null <command...> runs the command in a pseudo-terminal.
+    local inner = {}
+    for index = 4, #argv do
+      table.insert(inner, argv[index])
+    end
+    return self:simple(inner, mode, cwd)
   elseif program == "/usr/bin/xip" then
     return self:expand(argv[3], cwd, "xip --expand")
   elseif program == "/usr/bin/archiveutil" then
@@ -488,11 +501,11 @@ function World:sudo(argv, mode, cwd)
     return "", 1, cwd
   end
   local script = argv[#argv]
-  local developer_dir = script:match("DEVELOPER_DIR='([^']+)'")
+  local developer_dir = script:match("DEVELOPER_DIR=([^']+)'")
   for _, part in ipairs(split_top(script, "; ")) do
     local command = words(part)
     if command[1] ~= "set" then
-      while command[1]:match("^[%u_]+=") do
+      while command[1] == "/usr/bin/env" or command[1]:match("^[%u_]+=") do
         table.remove(command, 1)
       end
       command[1] = command[1]:match("[^/]+$")
@@ -582,9 +595,18 @@ end
 function World:install()
   local world = self
   package.path = "lib/?.lua;tests/?.lua;" .. package.path:gsub("lib/%?%.lua;tests/%?%.lua;", "")
-  for _, name in ipairs(plugin_modules) do
+  -- Every test starts with the plugin's modules loaded fresh, so nothing one
+  -- test did can carry into the next.
+  for _, name in ipairs(mise_modules) do
     package.loaded[name] = nil
     package.preload[name] = nil
+  end
+  for name in pairs(package.loaded) do
+    local file = io.open("lib/" .. name .. ".lua")
+    if file ~= nil then
+      file:close()
+      package.loaded[name] = nil
+    end
   end
 
   package.preload.cmd = function()
